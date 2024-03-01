@@ -18,6 +18,7 @@
   (:require [clojure.java.io :as io]
             [dynamo.graph :as g]
             [editor.code.script-intelligence :as si]
+            [editor.code.transpilers :as code.transpilers]
             [editor.collision-groups :as collision-groups]
             [editor.core :as core]
             [editor.error-reporting :as error-reporting]
@@ -85,9 +86,14 @@
           (try
             (when *load-cache*
               (swap! *load-cache* conj node-id))
-            (if (nil? resource-type)
-              (placeholder-resource/load-node project node-id resource)
-              (load-registered-resource-node resource-type project node-id resource))
+            (let [load-tx-steps (if (nil? resource-type)
+                                  (placeholder-resource/load-node project node-id resource)
+                                  (load-registered-resource-node resource-type project node-id resource))
+                  transpiler-tx-steps (code.transpilers/load-build-file-transaction-step
+                                        (workspace/code-transpilers (resource/workspace resource))
+                                        node-id
+                                        (resource/proj-path resource))]
+              (cond-> load-tx-steps transpiler-tx-steps (concat transpiler-tx-steps)))
             (catch Exception e
               (log/warn :msg (format "Unable to load resource '%s'" (resource/proj-path resource)) :exception e)
               (g/mark-defective node-id node-type (resource-io/invalid-content-error node-id nil :fatal resource (.getMessage e))))))))

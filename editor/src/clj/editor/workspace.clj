@@ -21,6 +21,7 @@ ordinary paths."
             [clojure.string :as string]
             [dynamo.graph :as g]
             [editor.code.preprocessors :as code.preprocessors]
+            [editor.code.transpilers :as code.transpilers]
             [editor.dialogs :as dialogs]
             [editor.fs :as fs]
             [editor.library :as library]
@@ -72,6 +73,9 @@ ordinary paths."
      (code-preprocessors workspace evaluation-context)))
   ([workspace evaluation-context]
    (g/node-value workspace :code-preprocessors evaluation-context)))
+
+(defn code-transpilers [workspace]
+  (g/graph-value (g/node-id->graph-id workspace) :code-transpilers))
 
 (defn notifications
   ([workspace]
@@ -399,7 +403,7 @@ ordinary paths."
         java-resource (when path (io/resource path))
         editor-resource (when path (find-resource workspace path))]
     (or java-resource editor-resource)))
-  
+
 (defn has-template? [workspace resource-type]
   (let [resource (get-template-resource workspace resource-type)]
     (not= resource nil)))
@@ -498,8 +502,11 @@ ordinary paths."
        (run! #(load-clojure-plugin! workspace %))))
 
 (defn- load-java-editor-plugins! [workspace]
-  (let [code-preprocessors (code-preprocessors workspace)]
-    (code.preprocessors/reload-lua-preprocessors! code-preprocessors class-loader)))
+  (g/with-auto-evaluation-context evaluation-context
+    (let [code-preprocessors (code-preprocessors workspace evaluation-context)
+          code-transpilers (code-transpilers workspace)]
+      (code.preprocessors/reload-lua-preprocessors! code-preprocessors class-loader)
+      (code.transpilers/reload-lua-transpilers! code-transpilers class-loader))))
 
 ; Determine if the extension has plugins, if so, it needs to be extracted
 
@@ -902,7 +909,9 @@ ordinary paths."
 (defn make-workspace [graph project-path build-settings workspace-config]
   (let [editable-proj-path? (if-some [non-editable-directory-proj-paths (not-empty (:non-editable-directories workspace-config))]
                               (make-editable-proj-path-predicate non-editable-directory-proj-paths)
-                              (constantly true))]
+                              (constantly true))
+        plugin-graph (g/make-graph! :history false :volatility 2)]
+    (g/set-graph-value! graph :code-transpilers (g/make-node! plugin-graph code.transpilers/CodeTranspilersNode))
     (first
       (g/tx-nodes-added
         (g/transact
