@@ -16,7 +16,9 @@
   "Define the concept of a project, and its Project node type. This namespace bridges between Eclipse's workbench and
   ordinary paths."
   (:require [clojure.java.io :as io]
+            [clojure.set :as set]
             [dynamo.graph :as g]
+            [editor.code.preprocessors :as code.preprocessors]
             [editor.code.script-intelligence :as si]
             [editor.code.transpilers :as code.transpilers]
             [editor.collision-groups :as collision-groups]
@@ -63,6 +65,9 @@
 (defn graph [project]
   (g/node-id->graph-id project))
 
+(defn code-transpilers [project]
+  (g/graph-value (g/node-id->graph-id project) :code-transpilers))
+
 (defn- load-registered-resource-node [resource-type project node-id resource]
   (concat
     (when-some [load-fn (:load-fn resource-type)]
@@ -90,7 +95,7 @@
                                   (placeholder-resource/load-node project node-id resource)
                                   (load-registered-resource-node resource-type project node-id resource))
                   transpiler-tx-steps (code.transpilers/load-build-file-transaction-step
-                                        (workspace/code-transpilers (resource/workspace resource))
+                                        (code-transpilers project)
                                         node-id
                                         (resource/proj-path resource))]
               (cond-> load-tx-steps transpiler-tx-steps (concat transpiler-tx-steps)))
@@ -662,7 +667,19 @@
                  :resource-metrics @resource-metrics
                  :transaction-metrics @transaction-metrics})))))
 
+(defn reload-plugins! [project touched-resources]
+  (g/with-auto-evaluation-context evaluation-context
+    (let [workspace (workspace project evaluation-context)
+          code-preprocessors (workspace/code-preprocessors workspace evaluation-context)
+          code-transpilers (code-transpilers project)]
+      (workspace/unpack-editor-plugins! workspace touched-resources)
+      (code.preprocessors/reload-lua-preprocessors! code-preprocessors workspace/class-loader)
+      (code.transpilers/reload-lua-transpilers! code-transpilers workspace/class-loader)
+      (workspace/load-clojure-editor-plugins! workspace touched-resources))))
+
 (defn- handle-resource-changes [project changes render-progress!]
+  (tap> {:valid-sets [(set? (:added changes)) (set? (:changed changes))]})
+  (reload-plugins! project (set/union (:added changes) (:changed changes)))
   (let [[old-nodes-by-path old-node->old-disk-sha256]
         (g/with-auto-evaluation-context evaluation-context
           (let [workspace (workspace project evaluation-context)
@@ -875,7 +892,11 @@
                 (g/connect workspace-id :resource-list project :resources)
                 (g/connect workspace-id :resource-map project :resource-map)
                 (g/set-graph-value graph :project-id project)
-                (g/set-graph-value graph :lsp (lsp/make project get-resource-node))))))]
+                (g/set-graph-value graph :lsp (lsp/make project get-resource-node))))))
+        plugin-graph (g/make-graph! :history false :volatility 2)]
+    (g/set-graph-value! graph :code-transpilers
+                        (g/make-node! plugin-graph code.transpilers/CodeTranspilersNode))
+    ;; TODO: reload!
     (workspace/add-resource-listener! workspace-id 1 (ProjectResourceListener. project-id))
     project-id))
 

@@ -145,6 +145,6 @@
 
 (comment
 
-  (editor.workspace/code-transpilers 0)
+  (editor.defold-project/code-transpilers (dev/project))
 
   #__)
