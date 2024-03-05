@@ -21,7 +21,6 @@ ordinary paths."
             [clojure.string :as string]
             [dynamo.graph :as g]
             [editor.code.preprocessors :as code.preprocessors]
-            [editor.code.transpilers :as code.transpilers]
             [editor.dialogs :as dialogs]
             [editor.fs :as fs]
             [editor.library :as library]

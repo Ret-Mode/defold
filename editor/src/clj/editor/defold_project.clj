@@ -674,12 +674,11 @@
           code-transpilers (code-transpilers project)]
       (workspace/unpack-editor-plugins! workspace touched-resources)
       (code.preprocessors/reload-lua-preprocessors! code-preprocessors workspace/class-loader)
-      (code.transpilers/reload-lua-transpilers! code-transpilers workspace/class-loader)
+      (code.transpilers/reload-lua-transpilers! code-transpilers workspace workspace/class-loader)
       (workspace/load-clojure-editor-plugins! workspace touched-resources))))
 
 (defn- handle-resource-changes [project changes render-progress!]
-  (tap> {:valid-sets [(set? (:added changes)) (set? (:changed changes))]})
-  (reload-plugins! project (set/union (:added changes) (:changed changes)))
+  (reload-plugins! project (set/union (set (:added changes)) (set (:changed changes))))
   (let [[old-nodes-by-path old-node->old-disk-sha256]
         (g/with-auto-evaluation-context evaluation-context
           (let [workspace (workspace project evaluation-context)
@@ -879,7 +878,9 @@
     (handle-resource-changes project-id changes render-progress!)))
 
 (defn make-project [graph workspace-id extensions]
-  (let [project-id
+  (let [plugin-graph (g/make-graph! :history false :volatility 2)
+        transpilers-id (g/make-node! plugin-graph code.transpilers/CodeTranspilersNode)
+        project-id
         (second
           (g/tx-nodes-added
             (g/transact
@@ -892,11 +893,9 @@
                 (g/connect workspace-id :resource-list project :resources)
                 (g/connect workspace-id :resource-map project :resource-map)
                 (g/set-graph-value graph :project-id project)
-                (g/set-graph-value graph :lsp (lsp/make project get-resource-node))))))
-        plugin-graph (g/make-graph! :history false :volatility 2)]
-    (g/set-graph-value! graph :code-transpilers
-                        (g/make-node! plugin-graph code.transpilers/CodeTranspilersNode))
-    ;; TODO: reload!
+                (g/set-graph-value graph :lsp (lsp/make project get-resource-node))
+                (g/set-graph-value graph :code-transpilers transpilers-id)))))]
+    (reload-plugins! project-id (g/node-value project-id :resources))
     (workspace/add-resource-listener! workspace-id 1 (ProjectResourceListener. project-id))
     project-id))
 
