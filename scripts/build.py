@@ -2023,19 +2023,12 @@ class Configuration(object):
     def upload_to_archive(self, src_file, dst_path):
         url = join(self.get_archive_path(), dst_path).replace("\\", "/")
         self._log("Uploading %s -> %s" % (src_file, url))
-        self.upload_to_s3(src_file, url)
 
         # create redirect so that the old s3 paths still work
         # s3://d.defold.com/archive/channel/sha1/engine/* -> http://d.defold.com/archive/sha1/engine/*
-        bucket = s3.get_bucket(urlparse(url).netloc)
-        redirect_key = self.get_archive_redirect_key(url)
         redirect_url = url.replace("s3://", "http://")
-        obj = bucket.Object(redirect_key)
-        obj.copy_from(
-            CopySource={'Bucket': bucket.name, 'Key': obj.key},
-            WebsiteRedirectLocation=redirect_url
-        )
-        self._log("Redirecting %s -> %s : %s" % (url, redirect_key, redirect_url))
+        self.upload_to_s3(src_file, url, redirect_url)
+
 
     def download_from_s3(self, path, url):
         url = url.replace('\\', '/')
@@ -2052,7 +2045,7 @@ class Configuration(object):
             raise Exception('Unsupported url %s' % (url))
 
 
-    def upload_to_s3(self, path, url):
+    def upload_to_s3(self, path, url, redirect_url):
         url = url.replace('\\', '/')
         self._log('Uploading %s -> %s' % (path, url))
 
@@ -2069,16 +2062,22 @@ class Configuration(object):
                 p += basename(path)
 
             def upload_singlefile():
-                bucket.upload_file(path, p)
+                extra_args = None
+                if redirect_url:
+                    extra_args = { 'WebsiteRedirectLocation': redirect_url }
+                    redirect_key = self.get_archive_redirect_key(url)
+                    self._log("Create redirection %s -> %s : %s after uploading" % (url, redirect_key, redirect_url))
+
+                bucket.upload_file(path, p, ExtraArgs=extra_args)
                 self._log('Uploaded %s -> %s' % (path, url))
 
             def upload_multipart():
                 contenttype, _ = mimetypes.guess_type(path)
                 mp = None
                 if contenttype is not None:
-                    mp = bucket.Object(p).initiate_multipart_upload(ContentType=contenttype)
+                    mp = bucket.Object(p).initiate_multipart_upload(ContentType=contenttype, WebsiteRedirectLocation=redirect_url)
                 else:
-                    mp = bucket.Object(p).initiate_multipart_upload()
+                    mp = bucket.Object(p).initiate_multipart_upload(WebsiteRedirectLocation=redirect_url)
 
                 source_size = os.stat(path).st_size
                 chunksize = 64 * 1024 * 1024 # 64 MiB
