@@ -2117,6 +2117,7 @@ class Configuration(object):
                 else:
                     mp.abort()
                     self._log('Failed to upload %s -> %s' % (path, url))
+                    raise RuntimeError('Failed to upload %s -> %s' % (path, url))
 
             f = None
             if sys.platform == 'win32':
