@@ -2079,6 +2079,10 @@ class Configuration(object):
                 else:
                     mp = bucket.Object(p).initiate_multipart_upload(WebsiteRedirectLocation=redirect_url)
 
+                if redirect_url:
+                    redirect_key = self.get_archive_redirect_key(url)
+                    self._log("Create redirection %s -> %s : %s after uploading" % (url, redirect_key, redirect_url))
+
                 source_size = os.stat(path).st_size
                 chunksize = 64 * 1024 * 1024 # 64 MiB
                 chunkcount = int(math.ceil(source_size / float(chunksize)))
@@ -2097,7 +2101,7 @@ class Configuration(object):
                     size = min(chunksize, remaining)
                     args = {'filepath': path, 'part': part, 'offset': offset, 'size': size}
 
-                    self._log('Uploading #%d %s -> %s' % (i + 1, path, url))
+                    self._log('Uploading #%d %s -> %s' % (part, path, url))
                     _thread = Thread(target=upload_part, kwargs=args)
                     _threads.append(_thread)
                     _thread.start()
@@ -2193,7 +2197,7 @@ class Configuration(object):
         return env
 
 if __name__ == '__main__':
-    urllib_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/urllib3-2.2.0-py3-none-any.whl'))
+    urllib_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/urllib3-2.2.1-py3-none-any.whl'))
     botocore_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/botocore-1.34.43-py3-none-any.whl'))
     boto_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/boto3-1.34.43-py3-none-any.whl'))
     data_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/boto3_data'))

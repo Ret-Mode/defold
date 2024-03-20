@@ -24,7 +24,7 @@ import s3
 CDN_UPLOAD_URL="s3://d.defold.com/archive"
 
 if __name__ == '__main__':
-    urllib_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/urllib3-2.2.0-py3-none-any.whl'))
+    urllib_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/urllib3-2.2.1-py3-none-any.whl'))
     botocore_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/botocore-1.34.43-py3-none-any.whl'))
     boto_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/boto3-1.34.43-py3-none-any.whl'))
     data_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../packages/boto3_data'))
