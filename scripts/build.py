@@ -185,9 +185,8 @@ class ThreadPool(object):
         self.workers = []
         self.work_queue = Queue()
 
-        for i in range(worker_count):
-            w = Thread(target = self.worker)
-            w.setDaemon(True)
+        for _ in range(worker_count):
+            w = Thread(target = self.worker, daemon=True)
             w.start()
             self.workers.append(w)
 

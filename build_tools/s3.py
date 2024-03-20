@@ -65,7 +65,7 @@ def get_bucket(bucket_name):
 
     import boto3.session
 
-    session = boto3.session.Session(aws_access_key_id=key, aws_secret_access_key=secret)
+    session = boto3.session.Session(aws_access_key_id=key, aws_secret_access_key=secret, region_name="eu-west-1")
     s3_client = session.resource('s3')    
     bucket = s3_client.Bucket(bucket_name)
     s3buckets[bucket_name] = bucket
