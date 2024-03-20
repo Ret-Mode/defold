@@ -2112,8 +2112,20 @@ class Configuration(object):
 
                 
                 if len(list(mp.parts.all())) == chunkcount:
-                    mp.complete()
-                    self._log('Uploaded %s -> %s' % (path, url))
+                    try:
+                        parts = []
+                        for part_summary in mp.parts.all():
+                            parts.append({ 'ETag': part_summary.e_tag, 'PartNumber': part_summary.part_number })
+
+                        mp.complete(MultipartUpload={ 'Parts': parts })
+                        self._log('Uploaded %s -> %s' % (path, url))
+                    except:
+                        # If any exception ocurred during completion - we need to call abort()
+                        # to free storage from uploaded parts. S3 doesn't do it automatically
+                        mp.abort()
+                        self._log('Failed to upload %s -> %s' % (path, url))
+                        raise RuntimeError('Failed to upload %s -> %s' % (path, url))
+
                 else:
                     mp.abort()
                     self._log('Failed to upload %s -> %s' % (path, url))
