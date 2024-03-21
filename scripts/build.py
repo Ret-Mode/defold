@@ -2022,7 +2022,6 @@ class Configuration(object):
 
     def upload_to_archive(self, src_file, dst_path):
         url = join(self.get_archive_path(), dst_path).replace("\\", "/")
-        self._log("Uploading %s -> %s" % (src_file, url))
 
         # create redirect so that the old s3 paths still work
         # s3://d.defold.com/archive/channel/sha1/engine/* -> http://d.defold.com/archive/sha1/engine/*
@@ -2090,8 +2089,10 @@ class Configuration(object):
                 def upload_part(filepath, part, offset, size):
                     with open(filepath, 'rb') as fhandle:
                         fhandle.seek(offset)
+                        part_content = fhandle.read(size)
                         part = mp.Part(part)
-                        part.upload(Body=fhandle,ContentLength=size)
+                        part.upload(Body=part_content, ContentLength=size)
+                        fhandle.close()
 
                 _threads = []
                 for i in range(chunkcount):

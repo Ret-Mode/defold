@@ -17,7 +17,6 @@ from log import log
 import os
 import re
 import sys
-import urllib
 from urllib.parse import urlparse
 from datetime import datetime
 from configparser import ConfigParser
