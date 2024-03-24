@@ -1831,7 +1831,7 @@ class Configuration(object):
         # * launcher files, used to launch editor2
         pattern = re.compile(r'(^|/)editor(2)*/|/defoldsdk\.zip$|/launcher(\.exe)*$')
         prefix = s3.get_archive_prefix(self.get_archive_path(), self._git_sha1())
-        for obj_summary in bucket.objects.filter(prefix = prefix):
+        for obj_summary in bucket.objects.filter(Prefix=prefix):
             rel = os.path.relpath(obj_summary.key, prefix)
 
             if not pattern.search(rel):
