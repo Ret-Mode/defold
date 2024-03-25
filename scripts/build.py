@@ -2022,11 +2022,7 @@ class Configuration(object):
 
     def upload_to_archive(self, src_file, dst_path):
         url = join(self.get_archive_path(), dst_path).replace("\\", "/")
-
-        # create redirect so that the old s3 paths still work
-        # s3://d.defold.com/archive/channel/sha1/engine/* -> http://d.defold.com/archive/sha1/engine/*
-        redirect_url = url.replace("s3://", "http://")
-        self.upload_to_s3(src_file, url, redirect_url)
+        self.upload_to_s3(src_file, url)
 
 
     def download_from_s3(self, path, url):
@@ -2044,7 +2040,7 @@ class Configuration(object):
             raise Exception('Unsupported url %s' % (url))
 
 
-    def upload_to_s3(self, path, url, redirect_url):
+    def upload_to_s3(self, path, url):
         url = url.replace('\\', '/')
         self._log('Uploading %s -> %s' % (path, url))
 
@@ -2052,6 +2048,10 @@ class Configuration(object):
 
         if u.scheme == 's3':
             bucket = s3.get_bucket(u.netloc)
+            # create redirect so that the old s3 paths still work
+            # s3://d.defold.com/archive/channel/sha1/engine/* -> http://d.defold.com/archive/sha1/engine/*
+            redirect_key = self.get_archive_redirect_key(url)
+            redirect_url = url.replace("s3://", "http://")
 
             if not self.thread_pool:
                 self.thread_pool = ThreadPool(8)
@@ -2063,26 +2063,18 @@ class Configuration(object):
             # strip first / character to make key like dir1/dir2/filename.ext
             p = p.lstrip('/')
             def upload_singlefile():
-                extra_args = None
-                if redirect_url:
-                    extra_args = { 'WebsiteRedirectLocation': redirect_url }
-                    redirect_key = self.get_archive_redirect_key(url)
-                    self._log("Create redirection %s -> %s : %s after uploading" % (url, redirect_key, redirect_url))
-
-                bucket.upload_file(path, p, ExtraArgs=extra_args)
+                bucket.upload_file(path, p)
                 self._log('Uploaded %s -> %s' % (path, url))
+                self._log("Create redirection %s -> %s : %s" % (url, redirect_key, redirect_url))
+                bucket.put_object(Key=redirect_key, Body='0', WebsiteRedirectLocation=redirect_url)
 
             def upload_multipart():
                 contenttype, _ = mimetypes.guess_type(path)
                 mp = None
                 if contenttype is not None:
-                    mp = bucket.Object(p).initiate_multipart_upload(ContentType=contenttype, WebsiteRedirectLocation=redirect_url)
+                    mp = bucket.Object(p).initiate_multipart_upload(ContentType=contenttype)
                 else:
-                    mp = bucket.Object(p).initiate_multipart_upload(WebsiteRedirectLocation=redirect_url)
-
-                if redirect_url:
-                    redirect_key = self.get_archive_redirect_key(url)
-                    self._log("Create redirection %s -> %s : %s after uploading" % (url, redirect_key, redirect_url))
+                    mp = bucket.Object(p).initiate_multipart_upload()
 
                 source_size = os.stat(path).st_size
                 chunksize = 64 * 1024 * 1024 # 64 MiB
@@ -2122,6 +2114,9 @@ class Configuration(object):
 
                         mp.complete(MultipartUpload={ 'Parts': parts })
                         self._log('Uploaded %s -> %s' % (path, url))
+                        self._log("Create redirection %s -> %s : %s" % (url, redirect_key, redirect_url))
+                        bucket.put_object(Key=redirect_key, Body='0', WebsiteRedirectLocation=redirect_url)
+
                     except:
                         # If any exception ocurred during completion - we need to call abort()
                         # to free storage from uploaded parts. S3 doesn't do it automatically
