@@ -2013,7 +2013,8 @@ class Configuration(object):
     def get_archive_redirect_key(self, url):
         old_url = url.replace(self.get_archive_path().replace("\\", "/"), self.archive_path)
         u = urlparse(old_url)
-        return u.path
+        p = u.path
+        return p.lstrip('/')
 
     def download_from_archive(self, src_path, dst_file):
         url = join(self.get_archive_path(), src_path)
