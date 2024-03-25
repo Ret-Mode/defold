@@ -2035,7 +2035,7 @@ class Configuration(object):
             self._mkdirs(os.path.dirname(path))
 
             bucket = s3.get_bucket(u.netloc)
-            bucket.download_file(u.path, path)
+            bucket.download_file(u.path.lstrip('/'), path)
             self._log('Downloaded %s -> %s' % (url, path))
         else:
             raise Exception('Unsupported url %s' % (url))
