@@ -2060,6 +2060,8 @@ class Configuration(object):
             if p[-1] == '/':
                 p += basename(path)
 
+            # strip first / character to make key like dir1/dir2/filename.ext
+            p = p.lstrip('/')
             def upload_singlefile():
                 extra_args = None
                 if redirect_url:
