@@ -280,7 +280,7 @@ namespace dmGameSystem
      * @param from [type:vector3] the world position of the start of the ray
      * @param to [type:vector3] the world position of the end of the ray
      * @param groups [type:table] a lua table containing the hashed groups for which to test collisions against
-     * @param [request_id] [type:number] a number between [0,-255]. It will be sent back in the response for identification, 0 by default
+     * @param [request_id] [type:number] a number in range [0,255]. It will be sent back in the response for identification, 0 by default
      * @examples
      *
      * How to perform a ray cast asynchronously:
@@ -358,7 +358,7 @@ namespace dmGameSystem
         dmMessage::URL receiver;
         dmMessage::ResetURL(&receiver);
         receiver.m_Socket = context->m_Socket;
-        dmMessage::Post(&sender, &receiver, dmPhysicsDDF::RequestRayCast::m_DDFDescriptor->m_NameHash, (uintptr_t)sender_instance, (uintptr_t)dmPhysicsDDF::RequestRayCast::m_DDFDescriptor, &request, sizeof(dmPhysicsDDF::RequestRayCast), 0);
+        dmMessage::Post(&sender, &receiver, dmPhysicsDDF::RequestRayCast::m_DDFDescriptor->m_NameHash, 0, (uintptr_t)dmPhysicsDDF::RequestRayCast::m_DDFDescriptor, &request, sizeof(dmPhysicsDDF::RequestRayCast), 0);
         return 0;
     }
 
@@ -392,7 +392,7 @@ namespace dmGameSystem
      * @param from [type:vector3] the world position of the start of the ray
      * @param to [type:vector3] the world position of the end of the ray
      * @param groups [type:table] a lua table containing the hashed groups for which to test collisions against
-     * @param options [type:table] a lua table containing options for the raycast.
+     * @param [options] [type:table] a lua table containing options for the raycast.
      *
      * `all`
      * : [type:boolean] Set to `true` to return all ray cast hits. If `false`, it will only return the closest hit.
@@ -521,10 +521,10 @@ namespace dmGameSystem
     };
 
     // Helper to get collisionobject component and world.
-    static void GetCollisionObject(lua_State* L, int indx, dmGameObject::HCollection collection, void** comp, void** comp_world)
+    static void GetCollisionObject(lua_State* L, int indx, dmGameObject::HCollection collection, dmGameObject::HComponent* comp, dmGameObject::HComponentWorld* comp_world)
     {
         dmMessage::URL receiver;
-        dmGameObject::GetComponentUserDataFromLua(L, indx, collection, COLLISION_OBJECT_EXT, (uintptr_t*)comp, &receiver, comp_world);
+        dmGameObject::GetComponentFromLua(L, indx, collection, COLLISION_OBJECT_EXT, comp, &receiver, comp_world);
     }
 
     static int GetTableField(lua_State* L, int table_index, const char* table_field, int expected_type)
@@ -1305,6 +1305,26 @@ namespace dmGameSystem
         return 1;
     }
 
+    /*#
+     * @name physics.SHAPE_TYPE_SPHERE
+     * @variable
+     */
+
+    /*#
+     * @name physics.SHAPE_TYPE_BOX
+     * @variable
+     */
+
+    /*#
+     * @name physics.SHAPE_TYPE_CAPSULE
+     * @variable
+     */
+
+    /*#
+     * @name physics.SHAPE_TYPE_HULL
+     * @variable
+     */
+
     /*# get collision shape info
      * Gets collision shape data from a collision object
      *
@@ -1417,17 +1437,20 @@ namespace dmGameSystem
      * local function set_shape_data()
      *     -- set capsule shape data
      *     local data = {}
+     *     data.type = physics.SHAPE_TYPE_CAPSULE
      *     data.diameter = 10
      *     data.height = 20
      *     physics.set_shape("#collisionobject", "my_capsule_shape", data)
      *
      *     -- set sphere shape data
      *     data = {}
+     *     data.type = physics.SHAPE_TYPE_SPHERE
      *     data.diameter = 10
      *     physics.set_shape("#collisionobject", "my_sphere_shape", data)
      *
      *     -- set box shape data
      *     data = {}
+     *     data.type = physics.SHAPE_TYPE_BOX
      *     data.dimensions = vmath.vector3(10, 10, 5)
      *     physics.set_shape("#collisionobject", "my_box_shape", data)
      * end
@@ -1459,7 +1482,7 @@ namespace dmGameSystem
 #define check_val(type_str, v) \
     if (v < 0.00005f) \
         luaL_error(L, "Shape '%s' has invalid size '%f' for '%s' ", dmHashReverseSafe64(shape_name_hash), v, type_str);
-            
+
             lua_getfield(L, -1, "type");
             shape_info.m_Type = (dmPhysicsDDF::CollisionShape::Type) luaL_checkinteger(L, -1);
             lua_pop(L, 1);
@@ -1538,24 +1561,26 @@ namespace dmGameSystem
      *   if event == hash("contact_point_event") then
      *     pprint(data)
      *     -- {
-     *     --  distance = 0.0714111328125,
-     *     --  applied_impulse = 310.00769042969,
-     *     --  a = {
-     *     --      position = vmath.vector3(446, 371, 0),
-     *     --      relative_velocity = vmath.vector3(1.1722083854693e-06, -20.667181015015, -0),
-     *     --      mass = 0,
-     *     --      group = hash: [default],
-     *     --      id = hash: [/flat],
-     *     --      normal = vmath.vector3(-0, -1, -0)
+     *     --  distance = 2.1490633487701,
+     *     --  applied_impulse = 0
+     *     --  a = { --[[0x113f7c6c0]]
+     *     --    group = hash: [box],
+     *     --    id = hash: [/box]
+     *     --    mass = 0,
+     *     --    normal = vmath.vector3(0.379, 0.925, -0),
+     *     --    position = vmath.vector3(517.337, 235.068, 0),
+     *     --    instance_position = vmath.vector3(480, 144, 0),
+     *     --    relative_velocity = vmath.vector3(-0, -0, -0),
      *     --  },
-     *     --  b = {
-     *     --      position = vmath.vector3(185, 657.92858886719, 0),
-     *     --      relative_velocity = vmath.vector3(-1.1722083854693e-06, 20.667181015015, 0),
-     *     --      mass = 10,
-     *     --      group = hash: [default],
-     *     --      id = hash: [/go2],
-     *     --      normal = vmath.vector3(0, 1, 0)
-     *     --  }
+     *     --  b = { --[[0x113f7c840]]
+     *     --    group = hash: [circle],
+     *     --    id = hash: [/circle]
+     *     --    mass = 0,
+     *     --    normal = vmath.vector3(-0.379, -0.925, 0),
+     *     --    position = vmath.vector3(517.337, 235.068, 0),
+     *     --    instance_position = vmath.vector3(-0.0021, 0, -0.0022),
+     *     --    relative_velocity = vmath.vector3(0, 0, 0),
+     *     --  },
      *     -- }
      *   elseif event == hash("collision_event") then
      *     pprint(data)
@@ -1610,7 +1635,6 @@ namespace dmGameSystem
     static int Physics_SetListener(lua_State* L)
     {
         DM_LUA_STACK_CHECK(L, 0);
-        int top = lua_gettop(L);
 
         dmScript::GetGlobal(L, PHYSICS_CONTEXT_HASH);
         PhysicsScriptContext* context = (PhysicsScriptContext*)lua_touserdata(L, -1);
@@ -1790,7 +1814,7 @@ namespace dmGameSystem
         {
             result = false;
         }
-        dmResource::ResourceType co_resource_type;
+        HResourceType co_resource_type;
         if (result)
         {
             dmResource::Result fact_result = dmResource::GetTypeFromExtension(context.m_Factory, COLLISION_OBJECT_EXT, &co_resource_type);

@@ -19,8 +19,7 @@
 #include <render/render.h>
 #include <render/font_renderer.h>
 #include <script/script.h>
-#include <dmsdk/gameobject/script.h>
-
+#include <dmsdk/gamesys/script.h>
 
 #include "script_label.h"
 #include "../components/comp_label.h"
@@ -278,7 +277,7 @@ static int SetText(lua_State* L)
 {
     DM_LUA_STACK_CHECK(L, 0);
 
-    dmGameObject::HInstance instance = CheckGoInstance(L);
+    (void)CheckGoInstance(L); // left to check that it's not called from incorrect context.
 
     size_t text_len = 0;
     const char* text = luaL_checklstring(L, 2, &text_len);
@@ -303,7 +302,7 @@ static int SetText(lua_State* L)
     dmScript::GetURL(L, &sender);
     dmScript::ResolveURL(L, 1, &receiver, &sender);
 
-    if (dmMessage::RESULT_OK != dmMessage::Post(&sender, &receiver, dmGameSystemDDF::SetText::m_DDFDescriptor->m_NameHash, (uintptr_t)instance, (uintptr_t)dmGameSystemDDF::SetText::m_DDFDescriptor, data, data_size, 0) )
+    if (dmMessage::RESULT_OK != dmMessage::Post(&sender, &receiver, dmGameSystemDDF::SetText::m_DDFDescriptor->m_NameHash, 0, (uintptr_t)dmGameSystemDDF::SetText::m_DDFDescriptor, data, data_size, 0) )
     {
         return DM_LUA_ERROR("Failed to send label string as message!");
     }
@@ -324,7 +323,8 @@ static int GetTextMetrics(lua_State* L)
     dmScript::ResolveURL(L, 1, &receiver, &sender);
 
     dmGameSystem::LabelComponent* component = 0;
-    dmGameObject::GetComponentFromLua(L, 1, LABEL_EXT, 0, (void**)&component, 0);
+    dmScript::GetComponentFromLua(L, 1, LABEL_EXT, 0, (dmGameObject::HComponent*)&component, 0);
+
     assert(component != 0);
 
     dmRender::TextMetrics metrics;
@@ -375,7 +375,7 @@ static int GetText(lua_State* L)
     dmScript::ResolveURL(L, 1, &receiver, &sender);
 
     dmGameSystem::LabelComponent* component = 0;
-    dmGameObject::GetComponentFromLua(L, 1, LABEL_EXT, 0, (void**)&component, 0);
+    dmScript::GetComponentFromLua(L, 1, LABEL_EXT, 0, (dmGameObject::HComponent*)&component, 0);
 
     const char* value = dmGameSystem::CompLabelGetText(component);
     lua_pushstring(L, value);

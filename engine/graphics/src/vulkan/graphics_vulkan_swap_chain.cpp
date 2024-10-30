@@ -153,6 +153,8 @@ namespace dmGraphics
                 capabilities.m_SurfaceCapabilities.maxImageCount);
         }
 
+        swap_chain_image_count = dmMath::Min(swap_chain_image_count, (uint32_t) DM_MAX_FRAMES_IN_FLIGHT);
+
         VkSwapchainCreateInfoKHR vk_swap_chain_create_info;
         memset((void*)&vk_swap_chain_create_info, 0, sizeof(vk_swap_chain_create_info));
 
@@ -167,7 +169,7 @@ namespace dmGraphics
         // imageArrayLayers: the number of views in a multiview/stereo surface.
         // For non-stereoscopic-3D applications, this value is 1
         vk_swap_chain_create_info.imageArrayLayers = 1;
-        vk_swap_chain_create_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        vk_swap_chain_create_info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
          // Move queue indices over to uint32_t array
         uint32_t queue_family_indices[2] = {(uint32_t) swapChain->m_QueueFamily.m_GraphicsQueueIx, (uint32_t) swapChain->m_QueueFamily.m_PresentQueueIx};
@@ -247,7 +249,6 @@ namespace dmGraphics
                 VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED,
                 swapChain->m_ResolveTexture);
             if (res != VK_SUCCESS)
             {
@@ -255,7 +256,7 @@ namespace dmGraphics
             }
 
             res = TransitionImageLayout(vk_device, logicalDevice->m_CommandPool, logicalDevice->m_GraphicsQueue,
-                swapChain->m_ResolveTexture->m_Handle.m_Image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                swapChain->m_ResolveTexture, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             if (res != VK_SUCCESS)
             {
                 return res;
@@ -314,6 +315,10 @@ namespace dmGraphics
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_device, surface, &capabilities.m_SurfaceCapabilities);
         vkGetPhysicalDeviceSurfaceFormatsKHR(vk_device, surface, &format_count, 0);
         vkGetPhysicalDeviceSurfacePresentModesKHR(vk_device, surface, &present_modes_count, 0);
+
+#if defined(ANDROID)
+        capabilities.m_SurfaceCapabilities.currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+#endif
 
         if (format_count > 0)
         {

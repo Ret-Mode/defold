@@ -25,6 +25,8 @@
 
 (def android #{:armv7-android :arm64-android})
 
+(def web #{:js-web :wasm-web})
+
 (def linux #{:x86_64-linux})
 
 (def vulkan
@@ -325,6 +327,11 @@
       (exclude-libs-toggles all-platforms ["liveupdate"])
       (libs-toggles all-platforms ["liveupdate_null"]))))
 
+(def types-setting
+  (make-check-box-setting
+    (concat
+      (generic-contains-toggles all-platforms :excludeSymbols ["ScriptTypesExt"]))))
+
 (def basis-transcoder-setting
   (make-check-box-setting
     (concat
@@ -338,17 +345,34 @@
 
 (def physics-setting
   (make-choice-setting
-    :none (concat (libs-toggles all-platforms ["physics_null"]) (exclude-libs-toggles all-platforms ["physics" "LinearMath" "BulletDynamics" "BulletCollision" "Box2D"]))
+    :none (concat (libs-toggles all-platforms ["physics_null"]) (exclude-libs-toggles all-platforms ["physics" "LinearMath" "BulletDynamics" "BulletCollision" "Box2D" "script_box2d"]) (generic-contains-toggles all-platforms :excludeSymbols ["ScriptBox2DExt"]))
     :2d   (concat (libs-toggles all-platforms ["physics_2d"])   (exclude-libs-toggles all-platforms ["physics" "LinearMath" "BulletDynamics" "BulletCollision"]))
-    :3d   (concat (libs-toggles all-platforms ["physics_3d"])   (exclude-libs-toggles all-platforms ["physics" "Box2D"]))
+    :3d   (concat (libs-toggles all-platforms ["physics_3d"])   (exclude-libs-toggles all-platforms ["physics" "Box2D" "script_box2d"]) (generic-contains-toggles all-platforms :excludeSymbols ["ScriptBox2DExt"]))
     :both))
+
+(def image-setting
+  (make-check-box-setting
+    (concat
+      (exclude-libs-toggles all-platforms ["image"])
+      (libs-toggles all-platforms ["image_null"])
+      (generic-contains-toggles all-platforms :excludeSymbols ["ScriptImageExt"]))))
+
+(def rig-setting
+  (make-choice-setting
+    :none (concat (libs-toggles all-platforms ["gamesys_rig_null" "gamesys_model_null" "rig_null"]) (exclude-libs-toggles all-platforms ["gamesys_model" "gamesys_rig" "rig"]) (generic-contains-toggles all-platforms :excludeSymbols ["ScriptModelExt"]))
+    :rig   (concat (libs-toggles all-platforms ["gamesys_model_null"])   (exclude-libs-toggles all-platforms ["gamesys_model"]) (generic-contains-toggles all-platforms :excludeSymbols ["ScriptModelExt"]))
+    :model))
+
 
 (def vulkan-toggles
   (concat
+    (exclude-libs-toggles [:x86_64-osx :arm64-osx :x86-win32 :x86_64-win32] ["platform"])
+    (libs-toggles [:x86_64-osx :arm64-osx :x86-win32 :x86_64-win32] ["platform_vulkan"])
     (libs-toggles [:x86_64-osx :arm64-osx :arm64-ios] ["graphics_vulkan" "MoltenVK"])
     (libs-toggles android ["graphics_vulkan"])
     (libs-toggles windows ["graphics_vulkan" "vulkan"])
     (libs-toggles linux ["graphics_vulkan" "X11-xcb"])
+    (generic-contains-toggles linux :dynamicLibs ["vulkan"])
     (generic-contains-toggles [:x86_64-osx :arm64-osx] :frameworks ["Metal" "IOSurface" "QuartzCore"])
     (generic-contains-toggles [:arm64-ios] :frameworks ["Metal" "IOSurface" "QuartzCore"])
     (generic-contains-toggles vulkan :symbols ["GraphicsAdapterVulkan"])))
@@ -361,6 +385,22 @@
               (generic-contains-toggles vulkan :excludeSymbols ["GraphicsAdapterOpenGL"]))
     :both vulkan-toggles
     :open-gl))
+
+(def webgpu-toggles
+  (concat
+    (libs-toggles web ["graphics_webgpu"])
+    (generic-contains-toggles web :symbols ["GraphicsAdapterWebGPU"])
+    (generic-contains-toggles web :emscriptenLinkFlags ["USE_WEBGPU=1" "GL_WORKAROUND_SAFARI_GETCONTEXT_BUG=0"])
+    (generic-contains-toggles [:wasm-web] :emscriptenLinkFlags ["ASYNCIFY=1" "ASYNCIFY_IGNORE_INDIRECT=1" "ASYNCIFY_ADD=[\"main\",\"dmEngineCreate(*)\",\"requestDeviceCallback(*)\",\"WebGPUCreateSwapchain(*)\",\"instanceRequestAdapterCallback(*)\"]"])))
+
+(def graphics-web-setting
+  (make-choice-setting
+    :web-gpu (concat
+               webgpu-toggles
+              (exclude-libs-toggles web ["graphics"])
+              (generic-contains-toggles web :excludeSymbols ["GraphicsAdapterOpenGL"]))
+    :both webgpu-toggles
+    :web-gl))
 
 (def ^:private app-manifest-key-order-pattern
   (let [platform-pattern [[:context [;; defines
@@ -430,6 +470,14 @@
                                                         [:none "None"]]}))
             (value (setting-property-getter physics-setting))
             (set (setting-property-setter physics-setting)))
+  (property Rig+Model g/Any
+            (dynamic tooltip (g/constantly "Rig, Model or none"))
+            (dynamic edit-type (g/constantly {:type :choicebox
+                                              :options [[:model "Rig & Model"]
+                                                        [:rig "Rig only"]
+                                                        [:none "None"]]}))
+            (value (setting-property-getter rig-setting))
+            (set (setting-property-setter rig-setting)))
   (property exclude-record g/Any
             (dynamic tooltip (g/constantly "Remove the video recording capabilities (desktop platforms)"))
             (dynamic edit-type (g/constantly {:type g/Bool}))
@@ -452,6 +500,14 @@
             (dynamic edit-type (g/constantly {:type g/Bool}))
             (value (setting-property-getter liveupdate-setting))
             (set (setting-property-setter liveupdate-setting)))
+  (property exclude-image g/Any
+            (dynamic edit-type (g/constantly {:type g/Bool}))
+            (value (setting-property-getter image-setting))
+            (set (setting-property-setter image-setting)))
+  (property exclude-types g/Any
+            (dynamic edit-type (g/constantly {:type g/Bool}))
+            (value (setting-property-getter types-setting))
+            (set (setting-property-setter types-setting)))
   (property exclude-basis-transcoder g/Any
             (dynamic edit-type (g/constantly {:type g/Bool}))
             (value (setting-property-getter basis-transcoder-setting))
@@ -468,7 +524,15 @@
                                                         [:vulkan "Vulkan"]
                                                         [:both "OpenGL & Vulkan"]]}))
             (value (setting-property-getter graphics-setting))
-            (set (setting-property-setter graphics-setting))))
+            (set (setting-property-setter graphics-setting)))
+  (property graphics-web g/Any
+            (dynamic tooltip (g/constantly "WebGPU support is in BETA (web platforms)"))
+            (dynamic edit-type (g/constantly {:type :choicebox
+                                              :options [[:web-gl "WebGL"]
+                                                        [:web-gpu "WebGPU"]
+                                                        [:both "WebGL & WebGPU"]]}))
+            (value (setting-property-getter graphics-web-setting))
+            (set (setting-property-setter graphics-web-setting))))
 
 (defn register-resource-types [workspace]
   (r/register-code-resource-type
@@ -478,4 +542,6 @@
     :label "App Manifest"
     :icon "icons/32/Icons_05-Project-info.png"
     :node-type AppManifestNode
-    :view-types [:code :default]))
+    :view-types [:code :default]
+    :view-opts {:code {:use-custom-editor false}}
+    :lazy-loaded true))

@@ -44,7 +44,6 @@ namespace dmGraphics
             dmLogInfo("vkEnumerateInstanceExtensionProperties (%d) failed: %d", __LINE__, result);
             return;
         }
-
     }
 
     static bool IsSupported(const dmArray<VkExtensionProperties>& extensions, const char* name)
@@ -199,11 +198,6 @@ namespace dmGraphics
         vk_application_info.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
         vk_application_info.apiVersion         = VK_API_VERSION_1_0;
 
-        // Required for interlock features
-    #ifdef DM_EXPERIMENTAL_GRAPHICS_FEATURES
-        vk_application_info.apiVersion = VK_API_VERSION_1_1;
-    #endif
-
         vk_required_extensions.SetCapacity(extensionNameCount + validationLayerExtensionCount);
 
         for (uint16_t i = 0; i < extensionNameCount; ++i)
@@ -215,9 +209,10 @@ namespace dmGraphics
         dmArray<VkExtensionProperties> extensions;
         GetExtensions(extensions);
 
-        // Static to keep life time while adding it to an array and passing it along
-        static const char* VK_KHR_get_physical_device_properties2_str = "VK_KHR_get_physical_device_properties2";
-        static const char* VK_KHR_portability_enumeration_str = "VK_KHR_portability_enumeration";
+    #ifdef __MACH__
+        static const char* VK_EXT_metal_objects_str = "VK_EXT_metal_objects";
+        AddIfSupported(extensions, VK_EXT_metal_objects_str, vk_required_extensions);
+    #endif
 
         if (validationLayerCount > 0)
         {
@@ -226,9 +221,12 @@ namespace dmGraphics
                 enabled_layer_count = validationLayerCount;
 
                 AddIfSupported(extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, vk_required_extensions);
+
             #ifdef __MACH__
+                static const char* VK_KHR_get_physical_device_properties2_str = "VK_KHR_get_physical_device_properties2";
                 AddIfSupported(extensions, VK_KHR_get_physical_device_properties2_str, vk_required_extensions);
             #else
+                static const char* VK_KHR_portability_enumeration_str = "VK_KHR_portability_enumeration";
                 AddIfSupported(extensions, VK_KHR_portability_enumeration_str, vk_required_extensions);
             #endif
 

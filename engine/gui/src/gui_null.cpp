@@ -116,11 +116,6 @@ namespace dmGui
         return ADJUST_REFERENCE_DISABLED;
     }
 
-    dmRig::HRigContext GetRigContext(HScene scene)
-    {
-        return 0;
-    }
-
     void SetDisplayProfiles(HContext context, void* display_profiles)
     {
     }
@@ -325,7 +320,7 @@ namespace dmGui
         return RESULT_OK;
     }
 
-    Result FinalScene(HScene scene, DeleteTexture delete_texture)
+    Result FinalScene(HScene scene)
     {
         return RESULT_OK;
     }
@@ -794,20 +789,6 @@ namespace dmGui
                          AnimationComplete animation_complete,
                          void* userdata1,
                          void* userdata2)
-    {
-    }
-
-    void AnimateNode(HScene scene,
-                     HNode node,
-                     Property property,
-                     const Vector4& to,
-                     dmEasing::Curve easing,
-                     Playback playback,
-                     float duration,
-                     float delay,
-                     AnimationComplete animation_complete,
-                     void* userdata1,
-                     void* userdata2)
     {
     }
 

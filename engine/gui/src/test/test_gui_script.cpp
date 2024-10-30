@@ -21,6 +21,8 @@
 #include <ddf/ddf.h>
 #include <script/lua_source_ddf.h>
 
+#include "test_gui_shared.h"
+
 #include "../gui.h"
 #include "../gui_private.h"
 #include "../gui_script.h"
@@ -62,6 +64,8 @@ public:
     dmGui::HContext m_Context;
     dmGui::RenderSceneParams m_RenderParams;
 
+    DynamicTextureContainer m_DynamicTextures;
+
     virtual void SetUp()
     {
         dmPlatform::WindowParams window_params = {};
@@ -72,7 +76,8 @@ public:
         m_Window = dmPlatform::NewWindow();
         dmPlatform::OpenWindow(m_Window, window_params);
 
-        m_ScriptContext = dmScript::NewContext(0, 0, true);
+        dmScript::ContextParams script_context_params = {};
+        m_ScriptContext = dmScript::NewContext(script_context_params);
         dmScript::Initialize(m_ScriptContext);
 
         m_HidContext = dmHID::NewContext(dmHID::NewContextParams());
@@ -88,9 +93,6 @@ public:
         m_Context = dmGui::NewContext(&context_params);
 
         m_RenderParams.m_RenderNodes = RenderNodesStoreTransform;
-        m_RenderParams.m_NewTexture = 0;
-        m_RenderParams.m_DeleteTexture = 0;
-        m_RenderParams.m_SetTextureData = 0;
     }
 
     virtual void TearDown()
@@ -1100,6 +1102,8 @@ TEST_F(dmGuiScriptTest, TestVisibilityApi)
 
 TEST_F(dmGuiScriptTest, TestGuiGetSet)
 {
+    dmHashEnableReverseHash(true);
+
     dmGui::HScript script = NewScript(m_Context);
 
     dmGui::NewSceneParams params;
@@ -1114,11 +1118,28 @@ TEST_F(dmGuiScriptTest, TestGuiGetSet)
             "function assert_near(a,b)\n"
             "    assert(math.abs(a-b) < EPSILON)\n"
             "end\n"
-            "function assert_near_vector4(a,b)\n"
+            "function check_near_vector4(a,b)\n"
             "    assert(math.abs(a.x-b.x) < EPSILON)\n"
             "    assert(math.abs(a.y-b.y) < EPSILON)\n"
             "    assert(math.abs(a.z-b.z) < EPSILON)\n"
             "    assert(math.abs(a.w-b.w) < EPSILON)\n"
+            "end\n"
+            "function check_near_vector3(a,b)\n"
+            "    assert(math.abs(a.x-b.x) < EPSILON)\n"
+            "    assert(math.abs(a.y-b.y) < EPSILON)\n"
+            "    assert(math.abs(a.z-b.z) < EPSILON)\n"
+            "end\n"
+            "function assert_near_vector4(a,b)\n"
+            "    local ok = pcall(check_near_vector4, a, b)"
+            "    if ok then return end"
+            "    print(\"Wanted\", a, \"but got\", b)\n"
+            "    assert(false)\n"
+            "end\n"
+            "function assert_near_vector3(a,b)\n"
+            "    local ok = pcall(check_near_vector3, a, b)"
+            "    if ok then return end"
+            "    print(\"Wanted\", a, \"but got\", b)\n"
+            "    assert(false)\n"
             "end\n"
             "local function assert_error(func)\n"
             "    local r, err = pcall(func)\n"
@@ -1148,12 +1169,21 @@ TEST_F(dmGuiScriptTest, TestGuiGetSet)
             "   assert_near_vector4(vmath.vector4(2001, 2002, 2003, 2004), gui.get(node, 'position'))\n"
             // Test rotation <-> euler conversion
             "   gui.set(node, 'rotation', vmath.quat_rotation_z(math.rad(45)))\n"
-            "   assert_near_vector4(vmath.vector4(0, 0, 45, 0), gui.get(node, 'euler'))\n"
+            "   assert_near_vector3(vmath.vector4(0, 0, 45, 0), gui.get(node, 'euler'))\n"
+            "   assert_near_vector3(vmath.vector4(0, 0, 45, 0), gui.get_euler(node))\n"
+            "   gui.set_rotation(node, vmath.quat_rotation_z(math.rad(90)))\n"
+            "   assert_near_vector3(vmath.vector4(0, 0, 90, 0), gui.get(node, 'euler'))\n"
+            "   assert_near_vector3(vmath.vector4(0, 0, 90, 0), gui.get_euler(node))\n"
             "   gui.set(node, 'euler', vmath.vector3(0, 0, 45))\n"
             "   assert_near_vector4(vmath.quat_rotation_z(math.rad(45)), gui.get(node, 'rotation'))\n"
+            "   assert_near_vector4(vmath.quat_rotation_z(math.rad(45)), gui.get_rotation(node))\n"
+            "   gui.set_euler(node, vmath.vector3(0, 0, 90))\n"
+            "   assert_near_vector4(vmath.quat_rotation_z(math.rad(90)), gui.get(node, 'rotation'))\n"
+            "   assert_near_vector4(vmath.quat_rotation_z(math.rad(90)), gui.get_rotation(node))\n"
             // Test rotation <-> euler conversion subcomponents
             "   gui.set(node, 'euler', vmath.vector4())\n"
             "   assert_near_vector4(vmath.vector4(0,0,0,1), gui.get(node, 'rotation'))\n"
+            "   assert_near_vector4(vmath.vector4(0,0,0,1), gui.get_rotation(node))\n"
             "   gui.set(node, 'euler.x', 180)\n"
             "   assert_near(1, gui.get(node, 'rotation.x'))\n"
             // Incorrect input for get
@@ -1181,7 +1211,7 @@ TEST_F(dmGuiScriptTest, TestGuiGetSet)
     dmGui::DeleteScript(script);
 }
 
-TEST_F(dmGuiScriptTest, TestRecreateDynamicTexture)
+TEST_F(dmGuiScriptTest, TestGuiAnimateEuler)
 {
     dmGui::HScript script = NewScript(m_Context);
 
@@ -1189,6 +1219,83 @@ TEST_F(dmGuiScriptTest, TestRecreateDynamicTexture)
     params.m_MaxNodes = 64;
     params.m_MaxAnimations = 32;
     params.m_UserData = this;
+    //params.m_RigContext = m_RigContext;
+    dmGui::HScene scene = dmGui::NewScene(m_Context, &params);
+    dmGui::SetSceneResolution(scene, 1, 1);
+    dmGui::SetSceneScript(scene, script);
+
+    // Set position
+    const char* src =
+            "function init(self)\n"
+            "    local n1 = gui.new_box_node(vmath.vector3(1, 1, 1), vmath.vector3(1, 1, 1))\n"
+            "    gui.animate(n1, gui.PROP_EULER, vmath.vector3(2, 3, 4), gui.EASING_LINEAR, 1)\n"
+            "end\n";
+
+    dmGui::Result result = SetScript(script, LuaSourceFromStr(src));
+    ASSERT_EQ(dmGui::RESULT_OK, result);
+
+    result = dmGui::InitScene(scene);
+    ASSERT_EQ(dmGui::RESULT_OK, result);
+
+    dmVMath::Matrix4 transform;
+    dmGui::RenderScene(scene, m_RenderParams, &transform);
+
+    {
+        dmVMath::Quat q(transform.getUpper3x3());
+        dmVMath::Vector3 euler = dmVMath::QuatToEuler(q.getX(), q.getY(), q.getZ(), q.getW());
+
+        ASSERT_NEAR(0.0f, euler.getX(), EPSILON);
+        ASSERT_NEAR(0.0f, euler.getY(), EPSILON);
+        ASSERT_NEAR(0.0f, euler.getZ(), EPSILON);
+    }
+
+    dmGui::UpdateScene(scene, 1.0f);
+
+    dmGui::RenderScene(scene, m_RenderParams, &transform);
+    {
+        dmVMath::Quat q(transform.getUpper3x3());
+        dmVMath::Vector3 euler = dmVMath::QuatToEuler(q.getX(), q.getY(), q.getZ(), q.getW());
+
+        // We use a fairly large epsilon here, as we are doing two conversions back to euler values
+        ASSERT_NEAR(2.0f, euler.getX(), 0.01f);
+        ASSERT_NEAR(3.0f, euler.getY(), 0.01f);
+        ASSERT_NEAR(4.0f, euler.getZ(), 0.01f);
+    }
+    dmGui::DeleteScene(scene);
+
+    dmGui::DeleteScript(script);
+}
+
+static dmGui::HTextureSource DynamicNewTexture(dmGui::HScene scene, const dmhash_t path_hash, uint32_t width, uint32_t height, dmImage::Type type, const void* buffer)
+{
+    dmGuiScriptTest* self = (dmGuiScriptTest*) scene->m_UserData;
+    return (dmGui::HTextureSource) self->m_DynamicTextures.New(path_hash, width, height, type, buffer);
+}
+
+static void DynamicDeleteTexture(dmGui::HScene scene, dmhash_t path_hash, dmGui::HTextureSource texture_source)
+{
+    dmGuiScriptTest* self = (dmGuiScriptTest*) scene->m_UserData;
+    self->m_DynamicTextures.Delete(path_hash);
+}
+
+static void DynamicSetTextureData(dmGui::HScene scene, dmhash_t path_hash, uint32_t width, uint32_t height, dmImage::Type type, const void* buffer)
+{
+    dmGuiScriptTest* self = (dmGuiScriptTest*) scene->m_UserData;
+    self->m_DynamicTextures.Set(path_hash, width, height, type, buffer);
+}
+
+TEST_F(dmGuiScriptTest, TestRecreateDynamicTexture)
+{
+    dmGui::HScript script = NewScript(m_Context);
+
+    dmGui::NewSceneParams params = {};
+    params.m_MaxNodes                      = 64;
+    params.m_MaxAnimations                 = 32;
+    params.m_UserData                      = this;
+    params.m_NewTextureResourceCallback    = DynamicNewTexture;
+    params.m_DeleteTextureResourceCallback = DynamicDeleteTexture;
+    params.m_SetTextureResourceCallback    = DynamicSetTextureData;
+
     dmGui::HScene scene = dmGui::NewScene(m_Context, &params);
     dmGui::SetSceneScript(scene, script);
 
@@ -1222,14 +1329,12 @@ TEST_F(dmGuiScriptTest, TestRecreateDynamicTexture)
     result = dmGui::UpdateScene(scene, 1.0f / 60);
     ASSERT_EQ(dmGui::RESULT_OK, result);
 
-    uint32_t width, height;
-    dmImage::Type type;
-    const void* buffer = 0;
+    dmhash_t path_hash = dmHashString64("tex");
 
-    result = dmGui::GetDynamicTextureData(scene, dmHashString64("tex"), &width, &height, &type, &buffer);
-    ASSERT_EQ(dmGui::RESULT_OK, result);
-    ASSERT_EQ(8, width);
-    ASSERT_EQ(8, height);
+    TestDynamicTexture* tex = m_DynamicTextures.Get(path_hash);
+    ASSERT_NE((TestDynamicTexture*) 0, tex);
+    ASSERT_EQ(8, tex->m_Width);
+    ASSERT_EQ(8, tex->m_Height);
 
     dmGui::DeleteScene(scene);
 

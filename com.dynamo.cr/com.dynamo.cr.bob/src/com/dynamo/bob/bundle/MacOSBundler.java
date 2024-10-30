@@ -118,7 +118,7 @@ public class MacOSBundler implements IBundler {
         resourcesDir.mkdirs();
         macosDir.mkdirs();
 
-        BundleHelper helper = new BundleHelper(project, platform, bundleDir, variant);
+        BundleHelper helper = new BundleHelper(project, platform, bundleDir, variant, this);
 
         BundleHelper.throwIfCanceled(canceled);
 
@@ -180,5 +180,10 @@ public class MacOSBundler implements IBundler {
         }
 
         BundleHelper.throwIfCanceled(canceled);
+
+        // Copy PrivacyManifest.xcprivacy
+        // According to https://developer.apple.com/documentation/bundleresources/privacy_manifest_files/adding_a_privacy_manifest_to_your_app_or_third-party_sdk#4336738
+        // the PrivacyInfo.xcprivacy  on macos should be in `Resources` folder
+        BundleHelper.copyPrivacyManifest(project, platform, resourcesDir);
     }
 }

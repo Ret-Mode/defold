@@ -111,9 +111,17 @@ protected:
         m_Loader = dmResourceProvider::FindLoaderByName(dmHashString64("archive"));
         ASSERT_NE((ArchiveLoader*)0, m_Loader);
 
-        dmURI::Parts uri;
-        dmURI::Parse("dmanif:build/src/test/resources", &uri);
+#define FSPREFIX ""
+#if defined(__EMSCRIPTEN__)
+        // Trigger the vsf init for emscripten (hidden in MakeHostPath)
+        char path[1024];
+        dmTestUtil::MakeHostPath(path, sizeof(path), "src");
+        #undef FSPREFIX
+        #define FSPREFIX DM_HOSTFS
+#endif
 
+        dmURI::Parts uri;
+        dmURI::Parse("dmanif:" FSPREFIX "build/src/test/resources", &uri);
 
         dmResourceProvider::Result result = dmResourceProvider::CreateMount(m_Loader, &uri, 0, &m_Archive);
         ASSERT_EQ(dmResourceProvider::RESULT_OK, result);
@@ -298,9 +306,11 @@ InMemoryParams params_in_memory_archives[] = {
 
 INSTANTIATE_TEST_CASE_P(ArchiveProviderInMemory, ArchiveProviderArchiveInMemory, jc_test_values_in(params_in_memory_archives));
 
+extern "C" void dmExportedSymbols();
 
 int main(int argc, char **argv)
 {
+    dmExportedSymbols();
     dmHashEnableReverseHash(true);
     dmLog::LogParams logparams;
     dmLog::LogInitialize(&logparams);

@@ -22,6 +22,7 @@
             [editor.fs :as fs]
             [editor.prefs :as prefs]
             [editor.resource :as resource]
+            [editor.resource-node :as resource-node]
             [editor.shared-editor-settings :as shared-editor-settings]
             [editor.system :as system]
             [editor.workspace :as workspace])
@@ -151,28 +152,30 @@
    (g/with-auto-evaluation-context evaluation-context
      (get-build-server-url prefs project evaluation-context)))
   (^String [prefs project evaluation-context]
-   (or (not-empty (prefs/get-prefs prefs "extensions-server" ""))
-       (not-empty (shared-editor-settings/get-setting project ["extensions" "build_server"] evaluation-context))
+   (or (not-empty (string/trim (prefs/get prefs [:extensions :build-server]))) ;; always trim because `prefs/get` does not return nil
+       (not-empty (some-> (shared-editor-settings/get-setting project ["extensions" "build_server"] evaluation-context) string/trim)) ;; use `some->` because `get-setting` may return nil
        defold-build-server-url)))
 
 (defn get-build-server-headers
-  ^String [prefs]
-  (prefs/get-prefs prefs "extensions-server-headers" defold-build-server-headers))
+  "Returns a (possibly empty) vector of header strings"
+  [prefs]
+  (into [] (remove string/blank?) (string/split-lines (prefs/get prefs [:extensions :build-server-headers]))))
 
 ;; Note: When we do bundling for Android via the editor, we need add
 ;;       [["android" "proguard"] "_app/app.pro"] to the returned table.
 (defn- global-resource-nodes-by-upload-path [project evaluation-context]
- (let [project-settings (g/node-value project :settings evaluation-context)]
-   (into {}
-         (keep (fn [[[section key] target]]
-                 (when-let [resource (get project-settings [section key])]
-                   (let [resource-node (project/get-resource-node project resource evaluation-context)]
-                     (if (some-> resource-node (g/node-value :resource evaluation-context) resource/exists?)
-                       [target resource-node]
-                       (throw (engine-build-errors/missing-resource-error "Missing Native Extension Resource"
-                                                                          (resource/proj-path resource)
-                                                                          (project/get-resource-node project "/game.project" evaluation-context)))))))
-               [[["native_extension" "app_manifest"] "_app/app.manifest"]]))))
+  (let [project-settings (g/node-value project :settings evaluation-context)]
+    (into {}
+          (keep (fn [[[section key] target]]
+                  (when-let [proj-path (get project-settings [section key])]
+                    (let [resource-node (project/get-resource-node project proj-path evaluation-context)]
+                      (if (some-> resource-node (g/node-value :resource evaluation-context) resource/exists?)
+                        [target resource-node]
+                        (throw (engine-build-errors/missing-resource-error
+                                 "Missing Native Extension Resource"
+                                 proj-path
+                                 (project/get-resource-node project "/game.project" evaluation-context))))))))
+          [[["native_extension" "app_manifest"] "_app/app.manifest"]])))
 
 (defn- get-ne-platform [platform]
   (case platform
@@ -235,7 +238,8 @@
         (.add (reify ExtenderResource
                 (getPath [_] upload-path)
                 (getContent [_]
-                  (if-let [^String content (some-> (g/node-value resource-node :save-data evaluation-context) :content)]
+                  (if-let [content (some-> (g/node-value resource-node :save-data evaluation-context)
+                                           (resource-node/save-data-content))]
                     (.getBytes content StandardCharsets/UTF_8)
                     (with-open [is (io/input-stream (g/node-value resource-node :resource evaluation-context))]
                       (.readAllBytes is))))
@@ -263,15 +267,14 @@
          :extender-platform extender-platform}
         (let [extender-client (ExtenderClient. build-server-url cache-directory)
               user-info (.getUserInfo (URI. build-server-url))
-              headers (into [] (remove string/blank?) (string/split-lines build-server-headers))
               destination-file (fs/create-temp-file! (str "build_" sdk-version) ".zip")
               log-file (fs/create-temp-file! (str "build_" sdk-version) ".txt")
               async true]
           (try
             (when (pos? (count user-info))
               (.setHeader extender-client "Authorization" (str "Basic " (.encodeToString (Base64/getEncoder) (.getBytes user-info StandardCharsets/UTF_8)))))
-            (when (pos? (count headers))
-              (.setHeaders extender-client headers))
+            (when (pos? (count build-server-headers))
+              (.setHeaders extender-client build-server-headers))
             (.build extender-client extender-platform sdk-version extender-resources destination-file log-file async)
             {:id {:type :custom :version cache-key}
              :engine-archive destination-file

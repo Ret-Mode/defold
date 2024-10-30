@@ -22,16 +22,16 @@
             [editor.error-reporting :as error-reporting]
             [editor.handler :as handler]
             [editor.icons :as icons]
-            [editor.progress :as progress]
             [editor.math :as math]
-            [editor.util :as eutil]
+            [editor.os :as os]
+            [editor.progress :as progress]
             [internal.util :as util]
             [service.log :as log]
             [service.smoke-log :as slog]
             [util.profiler :as profiler])
   (:import [com.defold.control ListCell]
            [com.defold.control LongField]
-           [com.defold.control TreeCell]
+           [com.defold.control DefoldStringConverter TreeCell]
            [com.sun.javafx.application PlatformImpl]
            [com.sun.javafx.event DirectEvent]
            [java.awt Desktop Desktop$Action]
@@ -41,6 +41,7 @@
            [javafx.animation AnimationTimer KeyFrame KeyValue Timeline]
            [javafx.application Platform]
            [javafx.beans InvalidationListener]
+           [javafx.beans.property ReadOnlyProperty]
            [javafx.beans.value ChangeListener ObservableValue]
            [javafx.collections FXCollections ListChangeListener ObservableList]
            [javafx.css Styleable]
@@ -48,14 +49,13 @@
            [javafx.fxml FXMLLoader]
            [javafx.geometry Orientation Point2D]
            [javafx.scene Group Node Parent Scene]
-           [javafx.scene.control ButtonBase Cell CheckBox CheckMenuItem ChoiceBox ColorPicker ComboBox ComboBoxBase ContextMenu Control Label Labeled ListView Menu MenuBar MenuItem MultipleSelectionModel ProgressBar SelectionMode SelectionModel Separator SeparatorMenuItem Tab TableView TabPane TextField TextInputControl Toggle ToggleButton Tooltip TreeItem TreeTableView TreeView]
+           [javafx.scene.control ButtonBase Cell CheckBox CheckMenuItem ChoiceBox ColorPicker ComboBox ComboBoxBase ContextMenu Control Label Labeled ListView Menu MenuBar MenuItem MultipleSelectionModel ProgressBar SelectionMode SelectionModel Separator SeparatorMenuItem Tab TabPane TableView TextArea TextField TextInputControl Toggle ToggleButton Tooltip TreeItem TreeTableView TreeView]
            [javafx.scene.image Image ImageView]
            [javafx.scene.input Clipboard ContextMenuEvent DragEvent KeyCode KeyCombination KeyEvent MouseButton MouseEvent]
            [javafx.scene.layout AnchorPane HBox Pane]
            [javafx.scene.shape SVGPath]
-           [javafx.stage DirectoryChooser FileChooser FileChooser$ExtensionFilter]
-           [javafx.stage Stage Modality PopupWindow StageStyle Window]
-           [javafx.util Callback Duration StringConverter]))
+           [javafx.stage Modality PopupWindow Stage StageStyle Window]
+           [javafx.util Callback Duration]))
 
 (set! *warn-on-reflection* true)
 
@@ -80,18 +80,44 @@
 (defn node? [value]
   (instance? Node value))
 
+(defn- set-application-focus-state [old-state focused window t]
+  ;; How we expect the focus to be changed over time (this works on e.g. macOS):
+  ;; [user opens dialog...]
+  ;; 1. main window: focus loss
+  ;; 2. dialog window: focus gain
+  ;; [...user interacts with dialog, then closes it...]
+  ;; 3. dialog window: focus loss
+  ;; 4. main window: focus gain
+  ;; How the focus actually works on Linux:
+  ;; [user opens dialog...]
+  ;; 1. dialog window: focus gain
+  ;; 2. main window: focus loss
+  ;; [...user interacts with dialog, then closes it...]
+  ;; 3. main window: focus gain
+  ;; When the dialog is open for longer than `application-unfocused-threshold-ms`,
+  ;; this Linux behavior causes resource sync to trigger after closing the dialog,
+  ;; which may lead to subtle bugs if the normal use of the dialog also triggers
+  ;; the resource sync. To fix the issue on Linux, we skip focus changes that
+  ;; report focus loss while another window is currently focused
+  (if (and (:focused old-state)
+           (not focused)
+           (not= (:window old-state) window))
+    old-state
+    {:focused focused :window window :t t}))
+
 (def focus-change-listener
   (reify ChangeListener
-    (changed [_ _ _ focused?]
-      (reset! focus-state {:focused? focused?
-                           :t (System/currentTimeMillis)}))))
+    (changed [_ observable-value _ focused]
+      (let [window (.getBean ^ReadOnlyProperty observable-value)
+            t (System/currentTimeMillis)]
+        (swap! focus-state set-application-focus-state focused window t)))))
 
 (defn add-application-focused-callback! [key application-focused! & args]
   (add-watch focus-state key
              (fn [_key _ref old new]
                (when (and old
-                          (not (:focused? old))
-                          (:focused? new))
+                          (not (:focused old))
+                          (:focused new))
                  (let [unfocused-ms (- (:t new) (:t old))]
                    (when (< application-unfocused-threshold-ms unfocused-ms)
                      (apply application-focused! args))))))
@@ -107,6 +133,9 @@
 
 (defprotocol HasAction
   (on-action! [this fn]))
+
+(defprotocol Cancellable
+  (on-cancel! [this cancel-fn]))
 
 (defprotocol HasValue
   (value [this])
@@ -188,7 +217,7 @@
     ;; provides the .app icon when bundling and child windows are rendered
     ;; as miniatures when minimized, so there is no need to assign an icon
     ;; to each window on macOS unless we want the icon in the title bar.
-    (when-not (eutil/is-mac-os?)
+    (when-not (os/is-mac-os?)
       (.. stage getIcons (add application-icon-image)))
     stage))
 
@@ -574,12 +603,16 @@
                                     (when (user-data node ::auto-commit)
                                       (commit-fn nil)))))
   (on-edit! node (fn [_old _new]
-                   (if (user-data node ::suppress-auto-commit)
-                     (user-data! node ::suppress-auto-commit false)
-                     (user-data! node ::auto-commit true)))))
+                   (user-data! node ::auto-commit true))))
 
-(defn suppress-auto-commit! [^Node node]
-  (user-data! node ::suppress-auto-commit true))
+(defn- clear-auto-commit! [^Node node]
+  ;; Clear the auto-commit flag. You should call this whenever data has been
+  ;; synced with the graph while the field still has focus. This ensures the
+  ;; unedited value will not be committed to the graph unnecessarily after the
+  ;; user moves focus to another control. Further edits will re-apply the
+  ;; auto-commit flag, but if they leave without editing, we won't commit.
+  (when (user-data node ::auto-commit)
+    (user-data! node ::auto-commit false)))
 
 (defn increase-on-edit-event-suppress-count! [editable]
   (when-some [suppress-count (user-data editable ::on-edit-event-suppress-count)]
@@ -750,14 +783,43 @@
   (value [this] (.getValue this))
   (value! [this val] (with-on-edit-event-suppressed! this (.setValue this val))))
 
+(declare bind-key!)
+
 (extend-type TextField
   HasAction
-  (on-action! [node fn]
+  (on-action! [node update-fn]
     (.setOnAction node (event-handler e
-                         ;; Clear the auto-commit flag. Further edits will re-apply it.
-                         (when (user-data node ::auto-commit)
-                           (user-data! node ::auto-commit false))
-                         (fn e)))))
+                         (clear-auto-commit! node)
+                         (let [length (.getLength (.getSelection node))]
+                           (update-fn e)
+                           (if (zero? length)
+                             (.selectAll node)
+                             (.deselect node))))))
+  Cancellable
+  (on-cancel! [node cancel-fn]
+    (bind-key! node "Esc" (fn []
+                            (cancel-fn node)
+                            (clear-auto-commit! node)
+                            (when-let [parent (.getParent node)]
+                              (.requestFocus parent))))))
+
+(extend-type TextArea
+  HasAction
+  (on-action! [node update-fn]
+    (bind-key! node "Shortcut+Enter" (fn []
+                                       (clear-auto-commit! node)
+                                       (let [length (.getLength (.getSelection node))]
+                                         (update-fn node)
+                                         (if (zero? length)
+                                           (.selectAll node)
+                                           (.deselect node))))))
+  Cancellable
+  (on-cancel! [node cancel-fn]
+    (bind-key! node "Esc" (fn []
+                            (cancel-fn node)
+                            (clear-auto-commit! node)
+                            (when-let [parent (.getParent node)]
+                              (.requestFocus parent))))))
 
 (extend-type Labeled
   Text
@@ -1295,7 +1357,7 @@
       (doto (.getStyleClass menu-item)
         (.addAll style-classes)))
     (.setDisable menu-item (not enabled?))
-    (if (eutil/is-mac-os?)
+    (if (os/is-mac-os?)
       ;; On macOS, there is no way to prevent a shortcut handled by a
       ;; scene accelerator from also triggering a MenuItem with the
       ;; same accelerator. To avoid invoking the command twice, we use
@@ -1696,7 +1758,7 @@
     ;; The system menu bar on osx seems to handle consecutive
     ;; separators and using .setVisible to hide a SeparatorMenuItem
     ;; makes the entire containing submenu appear empty.
-    (when-not (and (eutil/is-mac-os?)
+    (when-not (and (os/is-mac-os?)
                    (.isUseSystemMenuBar menubar))
       (refresh-separator-visibility (.getItems m)))
     (refresh-menu-item-styles (.getItems m)))
@@ -1741,9 +1803,7 @@
                                                  (let [hbox (doto (HBox.)
                                                               (add-style! "cell"))
                                                        cb (doto (ChoiceBox.)
-                                                            (.setConverter (proxy [StringConverter] []
-                                                                             (fromString [str] (some #{str} (map :label opts)))
-                                                                             (toString [v] (:label v)))))]
+                                                            (.setConverter (DefoldStringConverter. :label #(some #{%} (map :label opts)))))]
                                                    (.setAll (.getItems cb) ^Collection opts)
                                                    (observe (.valueProperty cb) (fn [this old new]
                                                                                   (when new
@@ -1839,7 +1899,7 @@
     (when-let [md (user-data root ::menubar)]
       (let [^MenuBar menu-bar (:control md)
             menu (cond-> (handler/realize-menu (:menu-id md))
-                         (eutil/is-mac-os?)
+                         (os/is-mac-os?)
                          (menu-data-without-icons))]
         (cond
           (refresh-menubar? menu-bar menu visible-command-contexts)
@@ -2043,7 +2103,7 @@
 
 (defn- show-dialog-stage [^Stage stage show-fn]
   (.setOnShown stage (event-handler _ (slog/smoke-log "show-dialog")))
-  (if (and (eutil/is-mac-os?)
+  (if (and (os/is-mac-os?)
            (= (.getOwner stage) (main-stage)))
     (let [scene (.getScene stage)
           root-pane ^Pane (.getRoot scene)

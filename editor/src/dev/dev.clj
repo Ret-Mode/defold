@@ -20,6 +20,7 @@
             [editor.buffers :as buffers]
             [editor.changes-view :as changes-view]
             [editor.code.data :as code.data]
+            [editor.code.util :as code.util]
             [editor.collection :as collection]
             [editor.console :as console]
             [editor.curve-view :as curve-view]
@@ -28,25 +29,39 @@
             [editor.gl.vertex2 :as vtx]
             [editor.math :as math]
             [editor.outline-view :as outline-view]
+            [editor.pipeline.bob :as bob]
             [editor.prefs :as prefs]
             [editor.properties-view :as properties-view]
+            [editor.protobuf :as protobuf]
             [editor.resource :as resource]
             [editor.resource-node :as resource-node]
             [editor.scene-cache :as scene-cache]
             [editor.util :as eutil]
+            [editor.workspace :as workspace]
+            [integration.test-util :as test-util]
             [internal.graph.types :as gt]
             [internal.node :as in]
             [internal.system :as is]
             [internal.util :as util]
+            [jfx :as jfx]
             [lambdaisland.deep-diff2 :as deep-diff]
+            [lambdaisland.deep-diff2.minimize-impl :as deep-diff.minimize-impl]
+            [lambdaisland.deep-diff2.printer-impl :as deep-diff.printer-impl]
             [lambdaisland.deep-diff2.puget.color :as puget.color]
             [lambdaisland.deep-diff2.puget.printer :as puget.printer]
-            [util.coll :as coll :refer [pair]])
+            [util.coll :as coll :refer [pair]]
+            [util.diff :as diff]
+            [util.fn :as fn])
   (:import [com.defold.util WeakInterner]
+           [com.dynamo.bob Platform]
+           [com.dynamo.graphics.proto Graphics$TextureImage Graphics$TextureImage$Image]
+           [com.google.protobuf Descriptors$FieldDescriptor Descriptors$FieldDescriptor$JavaType]
            [editor.code.data Cursor CursorRange]
+           [editor.gl.pass RenderPass]
            [editor.gl.vertex2 VertexBuffer]
            [editor.resource FileResource MemoryResource ZipResource]
            [editor.types AABB]
+           [editor.workspace BuildResource]
            [internal.graph.types Arc Endpoint]
            [java.beans BeanInfo Introspector MethodDescriptor PropertyDescriptor]
            [java.lang.reflect Modifier]
@@ -55,6 +70,10 @@
            [javax.vecmath Matrix3d Matrix4d Point2d Point3d Point4d Quat4d Vector2d Vector3d Vector4d]))
 
 (set! *warn-on-reflection* true)
+(set! *unchecked-math* :warn-on-boxed)
+
+(defn javafx-tree [obj]
+  (jfx/info-tree obj))
 
 (defn workspace []
   0)
@@ -161,7 +180,7 @@
                       :node-type (g/node-type* basis node-id)})))))
 
 (defn prefs []
-  (prefs/make-prefs "defold"))
+  (prefs/project (g/node-value (workspace) :root)))
 
 (declare ^:private exclude-keys-deep-helper)
 
@@ -477,7 +496,7 @@
   "Returns a sorted list of [occurrence-count entry]. The list is sorted by
   occurrence count in descending order."
   [coll]
-  (sort (fn [[occurrence-count-a entry-a] [occurrence-count-b entry-b]]
+  (sort (fn [[^long occurrence-count-a entry-a] [^long occurrence-count-b entry-b]]
           (cond (< occurrence-count-a occurrence-count-b) 1
                 (< occurrence-count-b occurrence-count-a) -1
                 (and (instance? Comparable entry-a)
@@ -508,6 +527,113 @@
   (ordered-occurrences
     (map (comp second key)
          (is/system-cache @g/*the-system*))))
+
+(defn- ns->namespace-name
+  ^String [ns]
+  (name (ns-name ns)))
+
+(defn- class->canonical-symbol [^Class class]
+  (symbol (.getName class)))
+
+(defn- make-alias-names-by-namespace-name [ns]
+  (into {(ns->namespace-name 'clojure.core) nil
+         (ns->namespace-name ns) nil}
+        (map (fn [[alias-symbol referenced-ns]]
+               (pair (ns->namespace-name referenced-ns)
+                     (name alias-symbol))))
+        (ns-aliases ns)))
+
+(defn- make-simple-symbols-by-canonical-symbol [ns]
+  (into {}
+        (map (fn [[alias-symbol imported-class]]
+               (pair (class->canonical-symbol imported-class)
+                     alias-symbol)))
+        (ns-imports ns)))
+
+(defn- simplify-namespace-name [namespace-name alias-names-by-namespace-name]
+  {:pre [(or (nil? namespace-name) (string? namespace-name))
+         (map? alias-names-by-namespace-name)]}
+  (let [alias-name (get alias-names-by-namespace-name namespace-name ::not-found)]
+    (case alias-name
+      ::not-found namespace-name
+      alias-name)))
+
+(defn- simplify-symbol-name [symbol-name]
+  (string/replace symbol-name
+                  #"__(\d+)__auto__$"
+                  "#"))
+
+(defn- simplify-symbol [expression alias-names-by-namespace-name]
+  (-> expression
+      (namespace)
+      (simplify-namespace-name alias-names-by-namespace-name)
+      (symbol (-> expression name simplify-symbol-name))
+      (with-meta (meta expression))))
+
+(defn- simplify-keyword [expression alias-names-by-namespace-name]
+  (-> expression
+      (namespace)
+      (simplify-namespace-name alias-names-by-namespace-name)
+      (keyword (name expression))))
+
+(defn- simplify-expression-impl [expression alias-names-by-namespace-name simple-symbols-by-canonical-symbol]
+  (cond
+    (record? expression)
+    expression
+
+    (map? expression)
+    (into (coll/empty-with-meta expression)
+          (map (fn [[key value]]
+                 (pair (simplify-expression-impl key alias-names-by-namespace-name simple-symbols-by-canonical-symbol)
+                       (simplify-expression-impl value alias-names-by-namespace-name simple-symbols-by-canonical-symbol))))
+          expression)
+
+    (or (vector? expression)
+        (set? expression))
+    (into (coll/empty-with-meta expression)
+          (map #(simplify-expression-impl % alias-names-by-namespace-name simple-symbols-by-canonical-symbol))
+          expression)
+
+    (coll/list-or-cons? expression)
+    (into (coll/empty-with-meta expression)
+          (map #(simplify-expression-impl % alias-names-by-namespace-name simple-symbols-by-canonical-symbol))
+          (reverse expression))
+
+    (symbol? expression)
+    (or (get simple-symbols-by-canonical-symbol expression)
+        (simplify-symbol expression alias-names-by-namespace-name))
+
+    (keyword? expression)
+    (simplify-keyword expression alias-names-by-namespace-name)
+
+    :else
+    expression))
+
+(defmacro simplify-expression
+  ([expression]
+   `(simplify-expression *ns* ~expression))
+  ([ns expression]
+   `(let [ns# ~ns]
+      (#'simplify-expression-impl
+        ~expression
+        (#'make-alias-names-by-namespace-name ns#)
+        (#'make-simple-symbols-by-canonical-symbol ns#)))))
+
+(defn- pprint-code-impl [expression]
+  (binding [pprint/*print-suppress-namespaces* false
+            pprint/*print-right-margin* 100
+            pprint/*print-miser-width* 60]
+    (pprint/with-pprint-dispatch
+      pprint/code-dispatch
+      (pprint/pprint expression))))
+
+(defmacro pprint-code
+  "Pretty-print the supplied code expression while attempting to retain readable
+  formatting. Useful when developing macros."
+  ([expression]
+   `(#'pprint-code-impl (simplify-expression ~expression)))
+  ([ns expression]
+   `(#'pprint-code-impl (simplify-expression ~ns ~expression))))
 
 ;; Utilities for investigating successors performance
 
@@ -565,8 +691,8 @@
      :else
      :external)))
 
-(defn- percentage-str [n total]
-  (eutil/format* "%.2f%%" (double (* 100 (/ n total)))))
+(defn- percentage-str [^long n ^long total]
+  (eutil/format* "%.2f%%" (* 100.0 (double (/ n total)))))
 
 (defn successor-pair-stats-by-kind
   "For a given coll of endpoints, group all successors by successor 'type',
@@ -639,7 +765,7 @@
          (into
            []
            (map-indexed
-             (fn [i pair-class]
+             (fn [^long i pair-class]
                (println (inc i) "/" (count pair-class-options))
                (let [this-pair-class? (comp #(= pair-class %) ->external-pair-class)]
                  {:pair-class pair-class
@@ -652,7 +778,7 @@
      (println "Improvements by pair link class:")
      (->> intermediate-results
           (sort-by :indirect-count)
-          (run! (fn [{:keys [pair-class direct-count indirect-count]}]
+          (run! (fn [{:keys [pair-class direct-count ^long indirect-count]}]
                   (let [[source-type source-label target-type target-label] pair-class
                         difference (- original-count indirect-count)]
                     (println (format "  %6s (of which %s direct) %s"
@@ -734,7 +860,8 @@
 
         next-capacity
         (util/first-where
-          #(< capacity %)
+          (fn [^long num]
+            (< capacity num))
           (:growth-sequence info))
 
         attempt-frequencies
@@ -885,10 +1012,11 @@
                document])
 
             (object-data-pprint-handler [printer-opts object->value printer object]
-              (cls-tag-doc
-                (cond-> pretty-printer printer-opts (merge printer-opts))
-                (class object)
-                (fmt-doc printer (object->value object))))]
+              (let [printer (cond-> printer printer-opts (merge printer-opts))]
+                (cls-tag-doc
+                  printer
+                  (class object)
+                  (fmt-doc printer (object->value object)))))]
 
       (let [editor-pprint-handlers
             {(namespaced-class-symbol AABB)
@@ -902,6 +1030,10 @@
 
              (namespaced-class-symbol CursorRange)
              (partial object-data-pprint-handler nil code.data/cursor-range-print-data)
+
+             (namespaced-class-symbol RenderPass)
+             (fn render-pass-pprint-handler [printer ^RenderPass render-pass]
+               (fmt-doc printer (symbol "pass" (.nm render-pass))))
 
              (namespaced-class-symbol VertexBuffer)
              (partial object-data-pprint-handler nil vertex-buffer-print-data)}
@@ -925,7 +1057,10 @@
                     (project-resource-pprint-handler [printer resource]
                       (object-data-pprint-handler nil project-resource->value printer resource))]
 
-              {(namespaced-class-symbol FileResource)
+              {(namespaced-class-symbol BuildResource)
+               project-resource-pprint-handler
+
+               (namespaced-class-symbol FileResource)
                project-resource-pprint-handler
 
                (namespaced-class-symbol MemoryResource)
@@ -957,7 +1092,7 @@
                                                       num-strs)
                             first-col-width-fmt (str \% first-col-width \s)
                             rest-col-width-fmt (str \% rest-col-width \s)
-                            fmt-col (fn [index num-str]
+                            fmt-col (fn [^long index num-str]
                                       (let [element (case num-str
                                                       ("-0.000" "0.000") :number
                                                       :string)
@@ -1002,15 +1137,47 @@
                vecmath-tuple-pprint-handler
 
                (namespaced-class-symbol Vector4d)
-               vecmath-tuple-pprint-handler})]
+               vecmath-tuple-pprint-handler})
+
+            protobuf-pprint-handlers
+            {(namespaced-class-symbol Graphics$TextureImage)
+             (partial object-data-pprint-handler {:sort-keys false}
+                      (fn [^Graphics$TextureImage texture-image]
+                        (let [alternatives (.getAlternativesList texture-image)
+                              alternatives-count (count alternatives)
+                              ^Graphics$TextureImage$Image image (first alternatives)]
+                          (cond-> {:type (protobuf/pb-enum->val (.getType texture-image))}
+
+                                  image
+                                  (assoc :format (protobuf/pb-enum->val (.getFormat image))
+                                         :width (.getWidth image)
+                                         :height (.getHeight image))
+
+                                  (> alternatives-count 1)
+                                  (assoc :alternatives alternatives-count)
+
+                                  :always
+                                  (assoc :bytes (transduce (map (fn [^Graphics$TextureImage$Image image]
+                                                                  (.size (.getData image))))
+                                                           +
+                                                           alternatives))))))}]
 
         (deep-diff/printer
-          {:extra-handlers
+          {:color-scheme
+           {::deep-diff.printer-impl/deletion [:red]
+            ::deep-diff.printer-impl/insertion [:green]
+            ::deep-diff.printer-impl/other [:yellow]
+            :boolean [:bold :cyan]
+            :nil [:bold :cyan]
+            :tag [:magenta]}
+
+           :extra-handlers
            (merge editor-pprint-handlers
                   graph-pprint-handlers
                   java-pprint-handlers
                   resource-pprint-handlers
-                  vecmath-pprint-handlers)})))))
+                  vecmath-pprint-handlers
+                  protobuf-pprint-handlers)})))))
 
 (defonce last-pprint-value-atom (atom nil))
 
@@ -1036,3 +1203,134 @@
 (defn uninstall-repl-pprint-tap! []
   (when-some [repl-pprint-tap (first (reset-vals! repl-pprint-tap-atom nil))]
     (remove-tap repl-pprint-tap)))
+
+(defn diff-values!
+  ([expected-value actual-value]
+   (diff-values! expected-value actual-value nil))
+  ([expected-value actual-value opts]
+   (let [diff (deep-diff/diff expected-value actual-value)]
+     (if (deep-diff.minimize-impl/has-diff-item? diff)
+       (deep-diff/pretty-print
+         (cond-> diff
+                 (:minimize opts) (deep-diff/minimize))
+         (cond-> pretty-printer
+                 opts (merge opts)))
+       (println "Values are identical.")))))
+
+(defn- to-diffable-text
+  ^String [value]
+  (if (and (seqable? value)
+           (string? (first value)))
+    (code.util/join-lines value)
+    (str value)))
+
+(defn diff-text! [expected-lines-or-string actual-lines-or-string]
+  (let [expected-string (to-diffable-text expected-lines-or-string)
+        actual-string (to-diffable-text actual-lines-or-string)]
+    (println
+      (or (some->> (diff/make-diff-output-lines expected-string actual-string 3)
+                   (code.util/join-lines))
+          "Strings are identical."))))
+
+(defn build-output-infos [project proj-path]
+  (let [resource-node (project/get-resource-node project proj-path)]
+    (assert (some? resource-node) (format "Resource node not found for: '%s'" proj-path))
+    (test-util/build-node! resource-node)
+    (let [build-resource (test-util/node-build-resource resource-node)
+          build-output-path (resource/proj-path build-resource)
+          workspace (resource/workspace build-resource)]
+      (test-util/make-build-output-infos-by-path workspace build-output-path))))
+
+(defn bob-build-output-infos [project proj-path]
+  (test-util/save-project! project)
+  (let [bob-commands ["build"]
+        bob-args {"platform" (.getPair (Platform/getHostPlatform))}
+        result (bob/invoke! project bob-args bob-commands)]
+    (when-let [exception (:exception result)]
+      (throw exception))
+    (if-let [error (:error result)]
+      error
+      (let [build-resource (test-util/build-resource project proj-path)
+            build-output-path (resource/proj-path build-resource)
+            workspace (resource/workspace build-resource)]
+        (test-util/make-build-output-infos-by-path workspace build-output-path)))))
+
+(defn- build-output-infos->diff-data [build-output-infos]
+  (into (sorted-map)
+        (map (fn [[build-output-path build-output-info]]
+               (pair build-output-path
+                     (select-keys build-output-info [:pb-map :dep-paths]))))
+        build-output-infos))
+
+(defn diff-editor-and-bob-build-output!
+  ([project proj-path]
+   (diff-editor-and-bob-build-output! project proj-path nil))
+  ([project proj-path opts]
+   (let [editor-build-output-infos (build-output-infos project proj-path)
+         bob-build-output-infos (bob-build-output-infos project proj-path)]
+     (diff-values! (build-output-infos->diff-data editor-build-output-infos)
+                   (build-output-infos->diff-data bob-build-output-infos)
+                   opts))))
+
+(defn pb-class-info
+  ([^Class pb-class]
+   (pb-class-info pb-class fn/constantly-true))
+  ([^Class pb-class field-info-predicate]
+   (into (sorted-map)
+         (keep (fn [^Descriptors$FieldDescriptor field-desc]
+                 (let [field-name (.getName field-desc)
+                       field-value-class (protobuf/field-value-class pb-class field-desc)
+                       field-rule (cond (.isRepeated field-desc) :repeated
+                                        (.isRequired field-desc) :required
+                                        (.isOptional field-desc) :optional
+                                        :else (assert false))
+                       field-info (cond-> {:value-type field-value-class
+                                           :field-rule field-rule}
+
+                                          (= Descriptors$FieldDescriptor$JavaType/MESSAGE (.getJavaType field-desc))
+                                          (assoc :message (pb-class-info field-value-class field-info-predicate)))]
+                   (when (field-info-predicate field-info)
+                     (pair field-name field-info)))))
+         (.getFields (protobuf/pb-class->descriptor pb-class)))))
+
+(defn pb-resource-type-info
+  ([workspace]
+   (pb-resource-type-info workspace fn/constantly-true))
+  ([workspace field-info-predicate]
+   (into (sorted-map)
+         (keep (fn [[ext {:keys [test-info] :as _resource-type}]]
+                 (when-let [pb-class (:ddf-type test-info)]
+                   (let [read-defaults (:read-defaults test-info)
+                         pb-class-info (pb-class-info pb-class field-info-predicate)]
+                     (pair ext {:read-defaults read-defaults
+                                :value-type pb-class
+                                :message pb-class-info})))))
+         (workspace/get-resource-type-map workspace))))
+
+(defn pb-resource-exts-that-read-defaults [workspace]
+  (test-util/protobuf-resource-exts-that-read-defaults workspace))
+
+(def class-name-comparator #(compare (.getName ^Class %1) (.getName ^Class %2)))
+
+(defn resource-pb-classes [workspace]
+  (letfn [(info->value-types [{:keys [message value-type]}]
+            (cond->> (mapcat info->value-types (vals message))
+                     (and message value-type) (cons value-type)))]
+    (into (sorted-set-by class-name-comparator)
+          (mapcat info->value-types)
+          (vals (pb-resource-type-info workspace)))))
+
+(defn resource-pb-class-field-types
+  ([workspace]
+   (resource-pb-class-field-types workspace fn/constantly-true))
+  ([workspace field-info-predicate]
+   (into (sorted-map-by class-name-comparator)
+         (keep (fn [^Class pb-class]
+                 (some->> (into (sorted-map)
+                                (keep (fn [[field-name {:keys [^Class value-type] :as field-info}]]
+                                        (when (field-info-predicate field-info)
+                                          (pair field-name value-type))))
+                                (pb-class-info pb-class))
+                          (not-empty)
+                          (pair pb-class))))
+         (resource-pb-classes workspace))))

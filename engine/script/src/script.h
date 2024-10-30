@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <dmsdk/script/script.h>
+#include <dmsdk/graphics/graphics.h>
 
 #include <dlib/vmath.h>
 #include <dlib/hash.h>
@@ -81,14 +82,19 @@ namespace dmScript
      */
     static const char* DEPRECATION_FUNCTION_FMT = "Function '%s.%s' is deprecated. Please use '%s.%s' instead.";
 
+    struct ContextParams
+    {
+        dmConfigFile::HConfig m_ConfigFile;
+        dmResource::HFactory  m_Factory;
+        dmGraphics::HContext  m_GraphicsContext;
+    };
+
     /**
      * Create and return a new context.
-     * @param config_file optional config file handle
-     * @param factory resource factory
-     * @param enable_extensions true if extensions should be initialized for this context
+     * @param params context creation params
      * @return context
      */
-    HContext NewContext(dmConfigFile::HConfig config_file, dmResource::HFactory factory, bool enable_extensions);
+    HContext NewContext(const ContextParams& params);
 
     /**
      * Delete an existing context.
@@ -276,6 +282,15 @@ namespace dmScript
      * @return true if value at #index is a FloatVector
      */
     bool IsVector(lua_State *L, int index);
+
+    /*# get the value at index as a dmVMath::FloatVector*
+     * Get the value at index as a dmVMath::FloatVector*
+     * @name dmScript::ToVector
+     * @param L [type:lua_State*] Lua state
+     * @param index [type:int] Index of the value
+     * @return v [type:dmVMath::FloatVector*] The pointer to the value, or 0 if not correct type
+     */
+    dmVMath::FloatVector* ToVector(lua_State *L, int index);
 
     /**
      * Push a FloatVector value onto the supplied lua state, will increase the stack by 1.
@@ -560,6 +575,7 @@ namespace dmScript
 
     /**
      * Register a user type along with methods and meta methods.
+     * It registers the type in the global context
      * @param L lua state
      * @param name user type name
      * @param methods array of methods
@@ -567,6 +583,16 @@ namespace dmScript
      * @return type_key the hash key registered for this user type
      */
     uint32_t RegisterUserType(lua_State* L, const char* name, const luaL_reg methods[], const luaL_reg meta[]);
+
+    /**
+     * Register an object oriented style user type along with methods.
+     * It doesn't register the type in the global context
+     * @param L lua state
+     * @param name user type name
+     * @param meta array of meta methods and object functions
+     * @return type_key the hash key registered for this user type
+     */
+    uint32_t RegisterUserTypeLocal(lua_State* L, const char* name, const luaL_reg meta[]);
 
     /**
      * Gets the type key of a user datas meta table.

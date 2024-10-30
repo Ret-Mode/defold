@@ -17,6 +17,8 @@
 #include <dlib/hashtable.h>
 #include <dlib/dstrings.h>
 
+#include <platform/platform_window.h>
+
 #include "hid_private.h"
 #include "hid.h"
 
@@ -58,6 +60,7 @@ namespace dmHID
 
     void Update(HContext context)
     {
+        dmPlatform::PollEvents(context->m_Window);
         context->m_Keyboards[0].m_Connected = !context->m_IgnoreKeyboard;
         context->m_Mice[0].m_Connected = !context->m_IgnoreMouse;
         context->m_TouchDevices[0].m_Connected = !context->m_IgnoreTouchDevice;
@@ -66,9 +69,9 @@ namespace dmHID
         context->m_Gamepads[0].m_AxisCount = MAX_GAMEPAD_AXIS_COUNT;
     }
 
-    void GetGamepadDeviceName(HContext context, HGamepad gamepad, char* buffer, uint32_t buffer_length)
+    void GetGamepadDeviceName(HContext context, HGamepad gamepad, char name[MAX_GAMEPAD_NAME_LENGTH])
     {
-        dmStrlCpy(buffer, "null_device", buffer_length);
+        dmStrlCpy(name, "null_device", MAX_GAMEPAD_NAME_LENGTH);
     }
 
     // platform implementations

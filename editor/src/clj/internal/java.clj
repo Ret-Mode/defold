@@ -13,7 +13,8 @@
 ;; specific language governing permissions and limitations under the License.
 
 (ns internal.java
-  (:import [java.lang.reflect Constructor Method Modifier]))
+  (:import [clojure.lang DynamicClassLoader]
+           [java.lang.reflect Constructor Method Modifier]))
 
 (set! *warn-on-reflection* true)
 
@@ -21,12 +22,15 @@
 
 (defonce no-classes-array (make-array Class 0))
 
+(defonce byte-array-class (.getClass (byte-array 0)))
+
 (defn- get-declared-methods-raw [^Class class]
   (.getDeclaredMethods class))
 
 (def get-declared-methods (memoize get-declared-methods-raw))
 
-(defn- get-declared-constructor-raw [^Class class args-classes]
+(defn- get-declared-constructor-raw
+  ^Constructor [^Class class args-classes]
   {:pre [(counted? args-classes)]}
   (.getDeclaredConstructor class (if (zero? (count args-classes))
                                    no-classes-array
@@ -34,7 +38,8 @@
 
 (def get-declared-constructor (memoize get-declared-constructor-raw))
 
-(defn- get-declared-method-raw [^Class class ^String method-name args-classes]
+(defn- get-declared-method-raw
+  ^Method [^Class class ^String method-name args-classes]
   {:pre [(counted? args-classes)]}
   (.getDeclaredMethod class method-name (if (zero? (count args-classes))
                                           no-classes-array
@@ -66,3 +71,12 @@
          (not (Modifier/isAbstract modifiers))
          (not= superclass subclass)
          (isa? subclass superclass))))
+
+;; Class loader used when loading editor extensions from libraries.
+;; It's important to use the same class loader, so the type signatures match.
+
+(def ^DynamicClassLoader class-loader
+  (DynamicClassLoader. (.getContextClassLoader (Thread/currentThread))))
+
+(defn load-class! [class-name]
+  (Class/forName class-name true class-loader))

@@ -32,6 +32,8 @@
 #include <hid/hid.h>
 #include <input/input_ddf.h>
 
+extern "C" void dmExportedSymbols();
+
 enum State
 {
     STATE_WAITING,
@@ -79,6 +81,7 @@ static void sig_handler(int _)
 
 int main(int argc, char *argv[])
 {
+    dmExportedSymbols();
 
     int result = 0;
     dmHID::HGamepad gamepad = dmHID::INVALID_GAMEPAD_HANDLE;
@@ -106,6 +109,7 @@ int main(int argc, char *argv[])
 
     dmPlatform::HWindow window = dmPlatform::NewWindow();
     dmPlatform::OpenWindow(window, window_params);
+    dmPlatform::ShowWindow(window);
 
     dmGraphics::ContextParams graphics_context_params;
     graphics_context_params.m_DefaultTextureMinFilter = dmGraphics::TEXTURE_FILTER_LINEAR_MIPMAP_NEAREST;
@@ -150,8 +154,8 @@ retry:
     {
         for (uint32_t i = 0; i < gamepad_count; ++i)
         {
-            char device_name[128];
-            dmHID::GetGamepadDeviceName(g_HidContext, gamepads[i], device_name, sizeof(device_name));
+            char device_name[dmHID::MAX_GAMEPAD_NAME_LENGTH];
+            dmHID::GetGamepadDeviceName(g_HidContext, gamepads[i], device_name);
             printf("%d: %s\n", i+1, device_name);
         }
         printf("\n* Which gamepad do you want to calibrate? [1-%d] ", gamepad_count);
@@ -173,8 +177,8 @@ retry:
         gamepad = gamepads[0];
     }
 
-    char device_name[128];
-    dmHID::GetGamepadDeviceName(g_HidContext, gamepad, device_name, sizeof(device_name));
+    char device_name[dmHID::MAX_GAMEPAD_NAME_LENGTH];
+    dmHID::GetGamepadDeviceName(g_HidContext, gamepad, device_name);
 
     printf("\n%s will be added to %s\n\n", device_name, filename);
 

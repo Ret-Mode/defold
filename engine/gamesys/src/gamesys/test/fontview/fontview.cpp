@@ -22,10 +22,12 @@
 
 #include "../../gamesys.h"
 
-#include "../../resources/res_font_map.h"
+#include "../../resources/res_font.h"
 #include "../../resources/res_fragment_program.h"
 #include "../../resources/res_vertex_program.h"
 #include "../../resources/res_material.h"
+
+#include <dmsdk/resource/resource.h>
 
 #ifdef __MACH__
 // Potential name clash with ddf. If included before ddf/ddf.h (TYPE_BOOL)
@@ -152,6 +154,7 @@ namespace dmFontView
             render_params.m_MaxRenderTypes = 10;
             render_params.m_MaxInstances = 100;
             render_params.m_MaxCharacters = 1024;
+            render_params.m_MaxBatches = 128;
             context->m_RenderContext = dmRender::NewRenderContext(context->m_GraphicsContext, render_params);
             dmRender::SetViewMatrix(context->m_RenderContext, Matrix4::identity());
             dmRender::SetProjectionMatrix(context->m_RenderContext, Matrix4::identity());
@@ -170,7 +173,7 @@ namespace dmFontView
                 return false;\
             }\
 
-            REGISTER_RESOURCE_TYPE("fontc", 0, dmGameSystem::ResFontMapCreate, 0, dmGameSystem::ResFontMapDestroy, dmGameSystem::ResFontMapRecreate);
+            REGISTER_RESOURCE_TYPE("fontc", 0, dmGameSystem::ResFontCreate, 0, dmGameSystem::ResFontDestroy, dmGameSystem::ResFontRecreate);
             REGISTER_RESOURCE_TYPE("vpc", dmGameSystem::ResVertexProgramPreload, dmGameSystem::ResVertexProgramCreate, 0, dmGameSystem::ResVertexProgramDestroy, dmGameSystem::ResVertexProgramRecreate);
             REGISTER_RESOURCE_TYPE("fpc", dmGameSystem::ResFragmentProgramPreload, dmGameSystem::ResFragmentProgramCreate, 0, dmGameSystem::ResFragmentProgramDestroy, dmGameSystem::ResFragmentProgramRecreate);
             REGISTER_RESOURCE_TYPE("materialc", 0, dmGameSystem::ResMaterialCreate, 0, dmGameSystem::ResMaterialDestroy, 0);

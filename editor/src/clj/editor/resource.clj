@@ -20,8 +20,10 @@
             [editor.core :as core]
             [editor.fs :as fs]
             [schema.core :as s]
-            [util.coll :refer [pair]]
-            [util.digest :as digest])
+            [util.coll :as coll :refer [pair]]
+            [util.digest :as digest]
+            [util.fn :as fn]
+            [util.text-util :as text-util])
   (:import [clojure.lang PersistentHashMap]
            [java.io File FilterInputStream IOException InputStream]
            [java.net URI]
@@ -52,13 +54,17 @@
 
 (def resource? (partial satisfies? Resource))
 
+(def placeholder-resource-type-ext "*")
+
 (defn type-ext [resource]
   (string/lower-case (ext resource)))
 
 (defn- get-resource-type [workspace resource]
-  (if (editable? resource)
-    (get (g/node-value workspace :resource-types) (type-ext resource))
-    (get (g/node-value workspace :resource-types-non-editable) (type-ext resource))))
+  (let [output-label (if (editable? resource) :resource-types :resource-types-non-editable)
+        resource-types (g/node-value workspace output-label)
+        ext (type-ext resource)]
+    (or (get resource-types ext)
+        (get resource-types placeholder-resource-type-ext))))
 
 (defn openable-resource? [value]
   ;; A resource is considered openable if its kind can be opened. Typically this
@@ -78,7 +84,8 @@
 (defn- ->unix-seps ^String [^String path]
   (FilenameUtils/separatorsToUnix path))
 
-(defn relative-path [^File f1 ^File f2]
+(defn relative-path
+  ^String [^File f1 ^File f2]
   ;; The strange comparison below is done due to the fact that we support case
   ;; insensitive file systems. For example NTFS and HFS. We want to compare the
   ;; paths without case but preserve the casing as supplied by the caller in the
@@ -126,7 +133,7 @@
                                         (string/split-lines (slurp defignore-file)))]
                      (fn ignored-path? [path]
                        (boolean (some #(string/starts-with? path %) prefixes))))
-                   (constantly false))]
+                   fn/constantly-false)]
         (swap! defignore-cache assoc defignore-path {:mtime latest-mtime :pred pred})
         pred))))
 
@@ -261,6 +268,15 @@
 (defn memory-resource? [resource]
   (instance? MemoryResource resource))
 
+(defn counterpart-memory-resource
+  "Given a MemoryResource, returns its editable or non-editable counterpart. We
+  use this during build target fusion to ensure embedded resources from editable
+  resources are fused with the equivalent embedded resources from non-editable
+  resources."
+  [memory-resource]
+  {:pre [(memory-resource? memory-resource)]}
+  (update memory-resource :editable not))
+
 (defn- make-zip-resource-input-stream
   ^InputStream [zip-resource]
   (let [zip-file (ZipFile. ^File (io/as-file (:zip-uri zip-resource)))
@@ -364,7 +380,9 @@
          zip-uri (.toURI zip-file)]
      {:tree (->> (reduce (fn [acc node] (assoc-in acc (string/split (:path node) #"/") node)) {} entries)
                  (mapv (fn [x] (->zip-resources workspace zip-uri "" x))))
-      :crc (into {} (map (juxt (fn [e] (str "/" (:path e))) :crc) entries))})))
+      :crc (into {}
+                 (map (juxt #(str "/" (:path %)) :crc))
+                 entries)})))
 
 (g/defnode ResourceNode
   (property resource Resource :unjammable
@@ -373,17 +391,17 @@
 (defn base-name ^String [resource]
   (FilenameUtils/getBaseName (resource-name resource)))
 
-(defn- seq-children [resource]
-  (seq (children resource)))
+(defn- non-empty-children [resource]
+  (coll/not-empty (children resource)))
 
 (defn resource-seq [root]
-  (tree-seq seq-children seq-children root))
+  (tree-seq non-empty-children non-empty-children root))
 
-(defn resource-list-seq [resource-list]
-  (apply concat (map resource-seq resource-list)))
+(def xform-recursive-resources
+  (mapcat resource-seq))
 
 (defn resource-map [roots]
-  (into {} (map (juxt proj-path identity) roots)))
+  (coll/pair-map-by proj-path roots))
 
 (defn resource->proj-path [resource]
   (if resource
@@ -445,16 +463,8 @@
       (.getAbsolutePath f))))
 
 (def ^:private ext->style-class
-  (let [config {"script" ["fp" "gui_script" "lua" "render_script" "script" "vp"
-                          "glsl"]
-                "design" ["atlas" "collection" "collisionobject" "cubemap" "dae"
-                          "font" "go" "gui" "label" "model" "particlefx"
-                          "spinemodel" "spinescene" "sprite" "tilemap"
-                          "tilesource" "render_target"]
-                "property" ["animationset" "camera" "collectionfactory"
-                            "collectionproxy" "display_profiles" "factory"
-                            "gamepads" "input_binding" "material" "project"
-                            "render" "sound" "texture_profiles"]}]
+  ;; TODO: make extension-spine use :icon-class
+  (let [config {"design" ["spinemodel" "spinescene"]}]
    (->> (for [[kind extensions] config
               :let [style-class (str "resource-kind-" kind)]
               ext extensions
@@ -463,17 +473,20 @@
         seq
         PersistentHashMap/createWithCheck)))
 
-(defn style-classes [resource]
-  (let [resource-kind-class (case (source-type resource)
-                              :file (some->> resource ext ext->style-class)
-                              :folder "resource-folder"
-                              nil)]
-    (cond-> #{"resource"} resource-kind-class (conj resource-kind-class))))
+(def icon-class->style-class
+  (coll/pair-map-by identity #(str "resource-kind-" (name %)) [:design :property :script]))
 
-(defn ext-style-classes [resource-ext]
-  (assert (or (nil? resource-ext) (string? resource-ext)))
-  (if-some [style-class (ext->style-class resource-ext)]
-    #{"resource" style-class}
+(defn type-style-classes [resource-type]
+  (if-let [explicit-class (or (some-> (:icon-class resource-type) icon-class->style-class)
+                              (some-> (:ext resource-type) ext->style-class))]
+    #{"resource" explicit-class}
+    #{"resource"}))
+
+(defn style-classes [resource]
+  (case (source-type resource)
+    :file (or (some-> (resource-type resource) type-style-classes)
+              #{"resource"})
+    :folder #{"resource" "resource-folder"}
     #{"resource"}))
 
 (defn filter-resources [resources query]
@@ -481,20 +494,48 @@
         matcher (.getPathMatcher file-system (str "glob:" query))]
     (filter (fn [r] (let [path (.getPath file-system (path r) (into-array String []))] (.matches matcher path))) resources)))
 
-(defn internal?
-  [resource]
+(defn internal? [resource]
   (string/starts-with? (resource->proj-path resource) "/_defold"))
 
-(defn textual-resource-type?
-  "Returns whether the resource type is marked as textual
+(defn placeholder-resource-type?
+  "Returns true if the specified resource-type is the placeholder resource type,
+  or false otherwise."
+  [resource-type]
+  (= placeholder-resource-type-ext (:ext resource-type)))
 
-  Resource type is a required argument. If a resource does not specify a
-  resource type, you can use [[util.text-util/binary?]] to estimate if
-  the content of the resource is textual or not"
+(defn- textual-resource-type?
+  "Returns whether the resource type is marked as textual. Note that the
+  placeholder resource type reports as textual, but might later call
+  [[util.text-util/binary?]] to estimate if the content is textual or not."
   [resource-type]
   {:pre [(some? resource-type)]
    :post [(boolean? %)]}
   (:textual? resource-type))
+
+(defn textual? [resource]
+  "Returns whether the resource is considered textual based on its type. If
+  we're unable to determine the type of the resource (i.e. it is a placeholder
+  resource), we scan through part of the file to determine if it looks textual.
+  The resource is expected to exist. If it does not, scanning the file will
+  throw an exception."
+  (let [resource-type (resource-type resource)]
+    (if (placeholder-resource-type? resource-type)
+      (not (text-util/binary? resource))
+      (textual-resource-type? resource-type))))
+
+(defn stateful-resource-type?
+  "Returns whether the resource type is marked as stateful."
+  [resource-type]
+  {:pre [(some? resource-type)]
+   :post [(boolean? %)]}
+  (not (:stateless? resource-type)))
+
+(defn stateful?
+  "Returns whether the resource is stateful textual based on its type.
+  Placeholder resources have a nil resource-type, but are assumed stateful since
+  they can be edited as plain text using the code editor."
+  [resource]
+  (stateful-resource-type? (resource-type resource)))
 
 (def ^:private known-ext->language
   ;; See known language identifiers:
@@ -517,3 +558,24 @@
   (or (:language (resource-type resource))
       (known-ext->language (ext resource))
       "plaintext"))
+
+(defn resource->text-matches [resource pattern]
+  (when (and (exists? resource)
+             (textual? resource))
+    (text-util/readable->text-matches resource pattern)))
+
+(defonce ^:private externally-available-extract-directory-delay
+  (delay (fs/create-temp-directory! "extract-")))
+
+(defn externally-available-absolute-path
+  ^String [resource]
+  (or (abs-path resource)
+      (when-some [relative-path (path resource)]
+        (let [temp-directory @externally-available-extract-directory-delay
+              temp-file (io/file temp-directory relative-path)]
+          (when-not (fs/existing-file? temp-file)
+            (fs/create-parent-directories! temp-file)
+            (with-open [input-stream (io/input-stream resource)]
+              (io/copy input-stream temp-file))
+            (fs/set-writable! temp-file false))
+          (.getAbsolutePath temp-file)))))

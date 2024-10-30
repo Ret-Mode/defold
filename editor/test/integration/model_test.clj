@@ -15,19 +15,20 @@
 (ns integration.model-test
   (:require [clojure.test :refer :all]
             [dynamo.graph :as g]
-            [editor.protobuf :as protobuf]
-            [integration.test-util :as test-util]
-            [editor.workspace :as workspace]
-            [editor.types :as types]
             [editor.properties :as properties]
+            [editor.protobuf :as protobuf]
+            [editor.types :as types]
+            [editor.workspace :as workspace]
+            [integration.test-util :as test-util]
             [util.murmur :as murmur])
-  (:import [javax.vecmath Point3d]
-           [com.dynamo.gamesys.proto ModelProto$ModelDesc]))
+  (:import [com.dynamo.gamesys.proto ModelProto$ModelDesc]
+           [javax.vecmath Point3d]))
 
 (deftest aabb
   (test-util/with-loaded-project
     (let [node-id (test-util/resource-node project "/model/test.model")
-          aabb (g/node-value node-id :aabb)
+          scene (g/node-value node-id :scene)
+          aabb (:aabb scene)
           min ^Point3d (types/min-p aabb)
           max ^Point3d (types/max-p aabb)]
       (is (< 10 (.distance max min))))))
@@ -49,10 +50,10 @@
       ;; test2.model has textures that don't match the names of the material, so
       ;; loading the model renames the texture bindings
       (let [node-id (test-util/resource-node project "/test.model")]
-        (is (g/node-value node-id :dirty?))
+        (is (g/node-value node-id :dirty))
         (is (= #{"tex_foo" "tex_bar" "tex_baz"}
                (->> (g/node-value node-id :resource)
-                    (protobuf/read-text ModelProto$ModelDesc)
+                    (protobuf/read-map-without-defaults ModelProto$ModelDesc)
                     :materials
                     (into #{}
                           (comp
@@ -88,14 +89,15 @@
         (is (nil? (test-util/prop-error node-id :mesh)))
         (doseq [v [nil (workspace/resolve-workspace-resource workspace "/not_found.dae")]]
           (test-util/with-prop [node-id :mesh v]
-            (is (g/error? (test-util/prop-error node-id :mesh))))))
+            (is (g/error? (test-util/prop-error node-id :mesh)))
+            (is (g/error-value? (g/node-value node-id :build-targets))))))
 
-      (testing "at least 1 material is required"
+      (testing "material must be assigned and exist"
         (is (not (g/error-value? (g/node-value node-id :build-targets))))
-        (let [material-binding-id (get-in (g/node-value node-id :material-binding-infos) [0 :_node-id])]
-          (doseq [v [nil (workspace/resolve-workspace-resource workspace "/not_found.material")]]
-            (test-util/with-prop [material-binding-id :material v]
-              (is (g/error-value? (g/node-value node-id :build-targets)))))))
+        (doseq [v [nil (workspace/resolve-workspace-resource workspace "/not_found.material")]]
+          (test-util/with-prop [node-id :__material__0 v]
+            (is (g/error? (test-util/prop-error node-id :__material__0)))
+            (is (g/error-value? (g/node-value node-id :build-targets))))))
 
       (testing "default-animation should be empty string or a valid animation"
         (is (nil? (test-util/prop-error node-id :animations)))
@@ -106,4 +108,5 @@
           (test-util/with-prop [node-id :default-animation "treasure_chest"]
             (is (not (g/error? (test-util/prop-error node-id :default-animation)))))
           (test-util/with-prop [node-id :default-animation "gurka"]
-            (is (g/error? (test-util/prop-error node-id :default-animation)))))))))
+            (is (g/error? (test-util/prop-error node-id :default-animation)))
+            (is (g/error-value? (g/node-value node-id :build-targets)))))))))

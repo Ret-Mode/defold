@@ -17,6 +17,8 @@
 
 #include <stdint.h>
 
+#include <graphics/graphics_ddf.h>
+
 /*# Graphics API documentation
  * [file:<dmsdk/graphics/graphics.h>]
  *
@@ -65,6 +67,13 @@ namespace dmGraphics
     typedef uintptr_t HFragmentProgram;
 
     /*#
+     * Compute program handle
+     * @typedef
+     * @name HComputeProgram
+     */
+    typedef uintptr_t HComputeProgram;
+
+    /*#
      * Program handle
      * @typedef
      * @name HProgram
@@ -84,6 +93,13 @@ namespace dmGraphics
      * @name HIndexBuffer
      */
     typedef uintptr_t HIndexBuffer;
+
+    /*#
+     * Storage buffer handle
+     * @typedef
+     * @name HStorageBuffer
+     */
+    typedef uintptr_t HStorageBuffer;
 
     /*#
      * Uniform location handle
@@ -107,11 +123,25 @@ namespace dmGraphics
     typedef struct VertexStreamDeclaration* HVertexStreamDeclaration;
 
     /*#
+     * PipelineState handle
+     * @typedef
+     * @name HPipelineState
+     */
+    typedef struct PipelineState* HPipelineState;
+
+    /*#
      * Invalid stream offset
      * @constant
      * @name INVALID_STREAM_OFFSET
      */
     const uint32_t INVALID_STREAM_OFFSET = 0xFFFFFFFF;
+
+    /*#
+     * Max buffer color attachments
+     * @constant
+     * @name MAX_BUFFER_COLOR_ATTACHMENTS
+     */
+    const uint8_t  MAX_BUFFER_COLOR_ATTACHMENTS = 4;
 
     /*#
      * @enum
@@ -141,6 +171,22 @@ namespace dmGraphics
         ATTACHMENT_DEPTH     = 1,
         ATTACHMENT_STENCIL   = 2,
         MAX_ATTACHMENT_COUNT = 3
+    };
+
+    /*#
+     * @enum
+     * @name AttachmentOp
+     * @member ATTACHMENT_OP_DONT_CARE
+     * @member ATTACHMENT_OP_LOAD
+     * @member ATTACHMENT_OP_STORE
+     * @member ATTACHMENT_OP_CLEAR
+     */
+    enum AttachmentOp
+    {
+        ATTACHMENT_OP_DONT_CARE,
+        ATTACHMENT_OP_LOAD,
+        ATTACHMENT_OP_STORE,
+        ATTACHMENT_OP_CLEAR,
     };
 
     /*#
@@ -398,6 +444,10 @@ namespace dmGraphics
         TYPE_FLOAT_MAT2       = 14,
         TYPE_FLOAT_MAT3       = 15,
         TYPE_IMAGE_2D         = 16,
+        TYPE_TEXTURE_2D       = 17,
+        TYPE_SAMPLER          = 18,
+        TYPE_TEXTURE_2D_ARRAY = 19,
+        TYPE_TEXTURE_CUBE     = 20
     };
 
     /*#
@@ -440,19 +490,6 @@ namespace dmGraphics
     };
 
     /*#
-     * Vertex step function. Dictates how the data for a vertex attribute should be read in a vertex shader.
-     * @enum
-     * @name VertexStepFunction
-     * @member VERTEX_STEP_FUNCTION_VERTEX
-     * @member VERTEX_STEP_FUNCTION_INSTANCE
-     */
-    enum VertexStepFunction
-    {
-        VERTEX_STEP_FUNCTION_VERTEX,
-        VERTEX_STEP_FUNCTION_INSTANCE,
-    };
-
-    /*#
      * Create new vertex stream declaration. A stream declaration contains a list of vertex streams
      * that should be used to create a vertex declaration from.
      * @name NewVertexStreamDeclaration
@@ -460,6 +497,16 @@ namespace dmGraphics
      * @return declaration [type: dmGraphics::HVertexStreamDeclaration] the vertex declaration
      */
     HVertexStreamDeclaration NewVertexStreamDeclaration(HContext context);
+
+    /*#
+     * Create new vertex stream declaration. A stream declaration contains a list of vertex streams
+     * that should be used to create a vertex declaration from.
+     * @name NewVertexStreamDeclaration
+     * @param context [type: dmGraphics::HContext] the context
+     * @param step_function [type: dmGraphics::VertexStepFunction] the vertex step function to use
+     * @return declaration [type: dmGraphics::HVertexStreamDeclaration] the vertex declaration
+     */
+    HVertexStreamDeclaration NewVertexStreamDeclaration(HContext context, VertexStepFunction step_function);
 
     /*#
      * Adds a stream to a stream declaration

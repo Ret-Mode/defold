@@ -116,14 +116,12 @@ namespace dmGui
      * @member NODE_TEXTURE_TYPE_NONE
      * @member NODE_TEXTURE_TYPE_TEXTURE
      * @member NODE_TEXTURE_TYPE_TEXTURE_SET
-     * @member NODE_TEXTURE_TYPE_DYNAMIC
      */
     enum NodeTextureType
     {
         NODE_TEXTURE_TYPE_NONE,
         NODE_TEXTURE_TYPE_TEXTURE,
         NODE_TEXTURE_TYPE_TEXTURE_SET,
-        NODE_TEXTURE_TYPE_DYNAMIC
     };
 
     // NOTE: These enum values are duplicated in scene desc in gamesys (gui_ddf.proto)
@@ -303,8 +301,9 @@ namespace dmGui
         PROPERTY_PIE_PARAMS = 8,
         PROPERTY_TEXT_PARAMS= 9,
         PROPERTY_EULER      = 10,
+        PROPERTY_PREV_EULER = 11, // Used to automatically detect if the euler property has been animated
 
-        PROPERTY_COUNT      = 11,
+        PROPERTY_COUNT      = 12,
     };
 
     /*#

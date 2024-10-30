@@ -61,10 +61,12 @@ namespace dmGraphics
         {
             switch(size)
             {
-                case 1: return VK_FORMAT_R32_SFLOAT;
-                case 2: return VK_FORMAT_R32G32_SFLOAT;
-                case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-                case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
+                case 1:  return VK_FORMAT_R32_SFLOAT;
+                case 2:  return VK_FORMAT_R32G32_SFLOAT;
+                case 3:  return VK_FORMAT_R32G32B32_SFLOAT;
+                case 4:  return VK_FORMAT_R32G32B32A32_SFLOAT;
+                case 9:  return VK_FORMAT_R32G32B32_SFLOAT;
+                case 16: return VK_FORMAT_R32G32B32A32_SFLOAT;
                 default:break;
             }
         }
@@ -76,6 +78,8 @@ namespace dmGraphics
                 case 2: return VK_FORMAT_R32G32_SINT;
                 case 3: return VK_FORMAT_R32G32B32_SINT;
                 case 4: return VK_FORMAT_R32G32B32A32_SINT;
+                case 9: return VK_FORMAT_R32G32B32_SINT;
+                case 16: return VK_FORMAT_R32G32B32A32_SINT;
                 default:break;
             }
         }
@@ -87,6 +91,8 @@ namespace dmGraphics
                 case 2: return VK_FORMAT_R32G32_UINT;
                 case 3: return VK_FORMAT_R32G32B32_UINT;
                 case 4: return VK_FORMAT_R32G32B32A32_UINT;
+                case 9: return VK_FORMAT_R32G32B32_UINT;
+                case 16: return VK_FORMAT_R32G32B32A32_UINT;
                 default:break;
             }
         }
@@ -98,6 +104,8 @@ namespace dmGraphics
                 case 2: return normalized ? VK_FORMAT_R8G8_SNORM : VK_FORMAT_R8G8_SINT;
                 case 3: return normalized ? VK_FORMAT_R8G8B8_SNORM : VK_FORMAT_R8G8B8_SINT;
                 case 4: return normalized ? VK_FORMAT_R8G8B8A8_SNORM : VK_FORMAT_R8G8B8A8_SINT;
+                case 9: return normalized ? VK_FORMAT_R8G8B8_SNORM : VK_FORMAT_R8G8B8_SINT;
+                case 16: return normalized ? VK_FORMAT_R8G8B8A8_SNORM : VK_FORMAT_R8G8B8A8_SINT;
                 default:break;
             }
         }
@@ -109,6 +117,8 @@ namespace dmGraphics
                 case 2: return normalized ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8G8_UINT;
                 case 3: return normalized ? VK_FORMAT_R8G8B8_UNORM : VK_FORMAT_R8G8B8_UINT;
                 case 4: return normalized ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_UINT;
+                case 9: return normalized ? VK_FORMAT_R8G8B8_UNORM : VK_FORMAT_R8G8B8_UINT;
+                case 16: return normalized ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_UINT;
                 default:break;
             }
         }
@@ -120,6 +130,8 @@ namespace dmGraphics
                 case 2: return normalized ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_R16G16_SINT;
                 case 3: return normalized ? VK_FORMAT_R16G16B16_SNORM : VK_FORMAT_R16G16B16_SINT;
                 case 4: return normalized ? VK_FORMAT_R16G16B16A16_SNORM : VK_FORMAT_R16G16B16A16_SINT;
+                case 9: return normalized ? VK_FORMAT_R16G16B16_SNORM : VK_FORMAT_R16G16B16_SINT;
+                case 16: return normalized ? VK_FORMAT_R16G16B16A16_SNORM : VK_FORMAT_R16G16B16A16_SINT;
                 default:break;
             }
         }
@@ -131,10 +143,12 @@ namespace dmGraphics
                 case 2: return normalized ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R16G16_UINT;
                 case 3: return normalized ? VK_FORMAT_R16G16B16_UNORM : VK_FORMAT_R16G16B16_UINT;
                 case 4: return normalized ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R16G16B16A16_UINT;
+                case 9: return normalized ? VK_FORMAT_R16G16B16_UNORM : VK_FORMAT_R16G16B16_UINT;
+                case 16: return normalized ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R16G16B16A16_UINT;
                 default:break;
             }
         }
-        else if (type == TYPE_FLOAT_MAT4)
+        else if (type == TYPE_FLOAT_MAT4 || type == TYPE_FLOAT_MAT3 || type == TYPE_FLOAT_MAT2)
         {
             return VK_FORMAT_R32_SFLOAT;
         }
@@ -145,28 +159,6 @@ namespace dmGraphics
 
         assert(0 && "Unable to deduce type from dmGraphics::Type");
         return VK_FORMAT_UNDEFINED;
-    }
-
-    static uint16_t FillVertexInputAttributeDesc(HVertexDeclaration vertexDeclaration, VkVertexInputAttributeDescription* vk_vertex_input_descs, uint32_t binding)
-    {
-        uint16_t num_attributes = 0;
-        for (uint16_t i = 0; i < vertexDeclaration->m_StreamCount; ++i)
-        {
-            if (vertexDeclaration->m_Streams[i].m_Location == -1)
-            {
-                continue;
-            }
-
-            VertexDeclaration::Stream& stream              = vertexDeclaration->m_Streams[i];
-            vk_vertex_input_descs[num_attributes].binding  = binding;
-            vk_vertex_input_descs[num_attributes].location = stream.m_Location;
-            vk_vertex_input_descs[num_attributes].format   = GetVertexAttributeFormat(stream.m_Type, stream.m_Size, stream.m_Normalize);
-            vk_vertex_input_descs[num_attributes].offset   = stream.m_Offset;
-
-            num_attributes++;
-        }
-
-        return num_attributes;
     }
 
     static VkResult AllocateDescriptorPool(DescriptorAllocator* allocator, VkDevice vk_device)
@@ -258,6 +250,40 @@ namespace dmGraphics
             m_DescriptorSetIndex  = 0;
             m_DescriptorPoolIndex = 0;
         }
+    }
+
+    VkResult OneTimeCommandBuffer::Begin()
+    {
+        assert(m_Context != 0);
+
+        VkCommandBuffer vk_command_buffer;
+        CreateCommandBuffers(m_Context->m_LogicalDevice.m_Device, m_Context->m_LogicalDevice.m_CommandPool, 1, &vk_command_buffer);
+        VkCommandBufferBeginInfo vk_command_buffer_begin_info;
+        memset(&vk_command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+
+        vk_command_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vk_command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VkResult res = vkBeginCommandBuffer(vk_command_buffer, &vk_command_buffer_begin_info);
+        m_CmdBuffer = vk_command_buffer;
+        return res;
+    }
+
+    VkResult OneTimeCommandBuffer::End()
+    {
+        vkEndCommandBuffer(m_CmdBuffer);
+
+        VkSubmitInfo vk_submit_info = {};
+        vk_submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        vk_submit_info.commandBufferCount = 1;
+        vk_submit_info.pCommandBuffers    = &m_CmdBuffer;
+
+        VkResult res = vkQueueSubmit(m_Context->m_LogicalDevice.m_GraphicsQueue, 1, &vk_submit_info, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_Context->m_LogicalDevice.m_GraphicsQueue);
+        vkFreeCommandBuffers(m_Context->m_LogicalDevice.m_Device, m_Context->m_LogicalDevice.m_CommandPool, 1, &m_CmdBuffer);
+
+        m_Context   = 0;
+        m_CmdBuffer = VK_NULL_HANDLE;
+        return res;
     }
 
     VkResult DeviceBuffer::MapMemory(VkDevice vk_device, uint32_t offset, uint32_t size)
@@ -432,31 +458,24 @@ namespace dmGraphics
         return vk_count_bits[dmMath::Min<uint8_t>(sample_count_index_requested, sample_count_index_max)];
     }
 
-    VkResult TransitionImageLayout(VkDevice vk_device, VkCommandPool vk_command_pool, VkQueue vk_graphics_queue, VkImage vk_image,
-        VkImageAspectFlags vk_image_aspect, VkImageLayout vk_from_layout, VkImageLayout vk_to_layout,
+    VkResult TransitionImageLayout(VkDevice vk_device, VkCommandPool vk_command_pool, VkQueue vk_graphics_queue, VulkanTexture* texture,
+        VkImageAspectFlags vk_image_aspect, VkImageLayout vk_to_layout,
         uint32_t baseMipLevel, uint32_t layer_count)
     {
-        // Create a one-time-execute command buffer that will only be used for the transition
-        VkCommandBuffer vk_command_buffer;
-        CreateCommandBuffers(vk_device, vk_command_pool, 1, &vk_command_buffer);
+        VkImageLayout vk_from_layout = texture->m_ImageLayout[baseMipLevel];
 
-        VkCommandBufferBeginInfo vk_command_buffer_begin_info;
-        memset(&vk_command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+        if (vk_from_layout == vk_to_layout)
+        {
+            return VK_SUCCESS;
+        }
 
-        vk_command_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        vk_command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        vkBeginCommandBuffer(vk_command_buffer, &vk_command_buffer_begin_info);
-
-        VkImageMemoryBarrier vk_memory_barrier;
-        memset(&vk_memory_barrier, 0, sizeof(vk_memory_barrier));
-
+        VkImageMemoryBarrier vk_memory_barrier            = {};
         vk_memory_barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         vk_memory_barrier.oldLayout                       = vk_from_layout;
         vk_memory_barrier.newLayout                       = vk_to_layout;
         vk_memory_barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
         vk_memory_barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        vk_memory_barrier.image                           = vk_image;
+        vk_memory_barrier.image                           = texture->m_Handle.m_Image;
         vk_memory_barrier.subresourceRange.aspectMask     = vk_image_aspect;
         vk_memory_barrier.subresourceRange.baseMipLevel   = baseMipLevel;
         vk_memory_barrier.subresourceRange.levelCount     = 1;
@@ -480,7 +499,7 @@ namespace dmGraphics
             vk_source_stage      = VK_PIPELINE_STAGE_HOST_BIT;
             vk_destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         }
-        else if (vk_from_layout == VK_IMAGE_LAYOUT_UNDEFINED && vk_to_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        else if ((vk_from_layout == VK_IMAGE_LAYOUT_UNDEFINED || vk_from_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) && vk_to_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         {
             vk_memory_barrier.srcAccessMask = 0;
             vk_memory_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -512,7 +531,7 @@ namespace dmGraphics
             vk_source_stage      = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             vk_destination_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         }
-        else if (vk_from_layout == VK_IMAGE_LAYOUT_UNDEFINED && vk_to_layout == VK_IMAGE_LAYOUT_GENERAL)
+        else if ((vk_from_layout == VK_IMAGE_LAYOUT_UNDEFINED || vk_from_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) && vk_to_layout == VK_IMAGE_LAYOUT_GENERAL)
         {
             vk_memory_barrier.srcAccessMask = 0;
             vk_memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -520,10 +539,29 @@ namespace dmGraphics
             vk_source_stage      = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             vk_destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         }
+        else if (vk_from_layout == VK_IMAGE_LAYOUT_UNDEFINED && vk_to_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            vk_memory_barrier.srcAccessMask = 0;
+            vk_memory_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            vk_source_stage      = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            vk_destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        }
         else
         {
-            assert(0);
+            // Transition not supported, so we early out.
+            return VK_SUCCESS;
         }
+
+        // Create a one-time-execute command buffer that will only be used for the transition
+        VkCommandBuffer vk_command_buffer;
+        CreateCommandBuffers(vk_device, vk_command_pool, 1, &vk_command_buffer);
+
+        VkCommandBufferBeginInfo vk_command_buffer_begin_info = {};
+        vk_command_buffer_begin_info.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vk_command_buffer_begin_info.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        vkBeginCommandBuffer(vk_command_buffer, &vk_command_buffer_begin_info);
 
         vkCmdPipelineBarrier(
             vk_command_buffer,
@@ -544,6 +582,8 @@ namespace dmGraphics
         vkQueueSubmit(vk_graphics_queue, 1, &vk_submit_info, VK_NULL_HANDLE);
         vkQueueWaitIdle(vk_graphics_queue);
         vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &vk_command_buffer);
+
+        texture->m_ImageLayout[baseMipLevel] = vk_to_layout;
 
         return VK_SUCCESS;
     }
@@ -584,6 +624,7 @@ namespace dmGraphics
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, max_descriptors},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          max_descriptors},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         max_descriptors},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          max_descriptors},
         };
 
         VkDescriptorPoolCreateInfo vk_pool_create_info;
@@ -635,7 +676,7 @@ namespace dmGraphics
         return vkAllocateCommandBuffers(vk_device, &vk_buffers_allocate_info, vk_command_buffers_out);
     }
 
-    VkResult CreateShaderModule(VkDevice vk_device, const void* source, uint32_t sourceSize, ShaderModule* shaderModuleOut)
+    VkResult CreateShaderModule(VkDevice vk_device, const void* source, uint32_t sourceSize, VkShaderStageFlagBits stage_flag, ShaderModule* shaderModuleOut)
     {
         assert(shaderModuleOut);
 
@@ -651,7 +692,21 @@ namespace dmGraphics
         dmHashUpdateBuffer64(&shader_hash_state, source, (uint32_t) sourceSize);
         shaderModuleOut->m_Hash = dmHashFinal64(&shader_hash_state);
 
-        return vkCreateShaderModule( vk_device, &vk_create_info_shader, 0, &shaderModuleOut->m_Module);
+        VkResult res = vkCreateShaderModule( vk_device, &vk_create_info_shader, 0, &shaderModuleOut->m_Module);
+        if (res != VK_SUCCESS)
+        {
+            return res;
+        }
+
+        VkPipelineShaderStageCreateInfo shader_create_info = {};
+        shader_create_info.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shader_create_info.stage  = stage_flag;
+        shader_create_info.module = shaderModuleOut->m_Module;
+        shader_create_info.pName  = "main";
+
+        shaderModuleOut->m_PipelineStageInfo = shader_create_info;
+
+        return VK_SUCCESS;
     }
 
     VkResult CreateDeviceBuffer(VkPhysicalDevice vk_physical_device, VkDevice vk_device,
@@ -771,7 +826,6 @@ bail:
         VkImageUsageFlags     vk_usage,
         VkMemoryPropertyFlags vk_memory_flags,
         VkImageAspectFlags    vk_aspect,
-        VkImageLayout         vk_initial_layout,
         VulkanTexture*        textureOut)
     {
         DeviceBuffer& device_buffer = textureOut->m_DeviceBuffer;
@@ -789,7 +843,7 @@ bail:
         vk_image_create_info.arrayLayers   = imageLayers;
         vk_image_create_info.format        = vk_format;
         vk_image_create_info.tiling        = vk_tiling;
-        vk_image_create_info.initialLayout = vk_initial_layout;
+        vk_image_create_info.initialLayout = textureOut->m_ImageLayout[0];
         vk_image_create_info.usage         = vk_usage;
         vk_image_create_info.samples       = vk_sample_count;
         vk_image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
@@ -1039,6 +1093,55 @@ bail:
         }
     }
 
+    static uint16_t FillVertexInputAttributeDesc(HVertexDeclaration vertexDeclaration, VkVertexInputAttributeDescription* vk_vertex_input_descs, uint32_t binding)
+    {
+        uint16_t num_attributes = 0;
+        for (uint16_t i = 0; i < vertexDeclaration->m_StreamCount; ++i)
+        {
+            if (vertexDeclaration->m_Streams[i].m_Location == -1)
+            {
+                continue;
+            }
+
+            VertexDeclaration::Stream& stream = vertexDeclaration->m_Streams[i];
+            VkFormat fmt = GetVertexAttributeFormat(stream.m_Type, stream.m_Size, stream.m_Normalize);
+
+            #define PUT_ATTRIBUTE(ix, loc, ofs, fmt) \
+                vk_vertex_input_descs[ix].binding = binding; \
+                vk_vertex_input_descs[ix].location = loc; \
+                vk_vertex_input_descs[ix].offset = ofs; \
+                vk_vertex_input_descs[ix].format = fmt;
+
+            uint32_t stream_data_size = GetGraphicsTypeDataSize(stream.m_Type);
+
+            // TODO: This doesn't support 2x2 matrices - we can't distinguish between a vec4 and a 2x2 matrix here currently
+            switch(stream.m_Size)
+            {
+            case 9: // 3x3 matrix
+                PUT_ATTRIBUTE(num_attributes + 0, (stream.m_Location + 0), (stream.m_Offset + 0 * stream_data_size * 3), fmt);
+                PUT_ATTRIBUTE(num_attributes + 1, (stream.m_Location + 1), (stream.m_Offset + 1 * stream_data_size * 3), fmt);
+                PUT_ATTRIBUTE(num_attributes + 2, (stream.m_Location + 2), (stream.m_Offset + 2 * stream_data_size * 3), fmt);
+                num_attributes += 3;
+                break;
+            case 16: // 4x4 matrix
+                PUT_ATTRIBUTE(num_attributes + 0, (stream.m_Location + 0), (stream.m_Offset + 0 * stream_data_size * 4), fmt);
+                PUT_ATTRIBUTE(num_attributes + 1, (stream.m_Location + 1), (stream.m_Offset + 1 * stream_data_size * 4), fmt);
+                PUT_ATTRIBUTE(num_attributes + 2, (stream.m_Location + 2), (stream.m_Offset + 2 * stream_data_size * 4), fmt);
+                PUT_ATTRIBUTE(num_attributes + 3, (stream.m_Location + 3), (stream.m_Offset + 3 * stream_data_size * 4), fmt);
+                num_attributes += 4;
+                break;
+            default:
+                PUT_ATTRIBUTE(num_attributes, stream.m_Location, stream.m_Offset, fmt);
+                num_attributes++;
+                break;
+            }
+
+            #undef PUT_ATTRIBUTE
+        }
+
+        return num_attributes;
+    }
+
     // These lookup values should match the ones in graphics_vulkan_constants.cpp
     static const VkPrimitiveTopology g_vk_primitive_types[] = {
         VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
@@ -1089,14 +1192,32 @@ bail:
         VK_COMPARE_OP_ALWAYS
     };
 
-    VkResult CreatePipeline(VkDevice vk_device, VkRect2D vk_scissor, VkSampleCountFlagBits vk_sample_count,
+    VkResult CreateComputePipeline(VkDevice vk_device, Program* program, Pipeline* pipelineOut)
+    {
+        assert(pipelineOut && *pipelineOut == VK_NULL_HANDLE);
+
+        VkComputePipelineCreateInfo vk_pipeline_create_info = {};
+        vk_pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        vk_pipeline_create_info.basePipelineHandle = 0;
+        vk_pipeline_create_info.basePipelineIndex  = 0;
+        vk_pipeline_create_info.flags              = 0;
+        vk_pipeline_create_info.layout             = program->m_Handle.m_PipelineLayout;
+        vk_pipeline_create_info.pNext              = 0;
+        vk_pipeline_create_info.stage              = program->m_ComputeModule->m_PipelineStageInfo;
+        return vkCreateComputePipelines(vk_device, 0, 1, &vk_pipeline_create_info, 0, pipelineOut);
+    }
+
+    VkResult CreateGraphicsPipeline(VkDevice vk_device, VkRect2D vk_scissor, VkSampleCountFlagBits vk_sample_count,
         PipelineState pipelineState, Program* program, VertexDeclaration** vertexDeclarations, uint32_t vertexDeclarationCount,
         RenderTarget* render_target, Pipeline* pipelineOut)
     {
         assert(pipelineOut && *pipelineOut == VK_NULL_HANDLE);
 
+        // This differs from MAX_VERTEX_STREAM_COUNT, since mat4 exhausts 4 desc slots
+        const uint32_t MAX_VERTEX_INPUT_DESCS_COUNT = 32;
+
         uint16_t active_attributes = 0;
-        VkVertexInputAttributeDescription vk_vertex_input_descs[MAX_VERTEX_STREAM_COUNT] = {};
+        VkVertexInputAttributeDescription vk_vertex_input_descs[MAX_VERTEX_INPUT_DESCS_COUNT] = {};
         VkVertexInputBindingDescription vk_vx_input_descriptions[MAX_VERTEX_BUFFERS] = {};
 
         for (int i = 0; i < vertexDeclarationCount; ++i)
@@ -1258,12 +1379,27 @@ bail:
         vk_dynamic_state_create_info.dynamicStateCount = sizeof(vk_dynamic_state) / sizeof(VkDynamicState);
         vk_dynamic_state_create_info.pDynamicStates    = vk_dynamic_state;
 
+        VkPipelineShaderStageCreateInfo vk_stage_create_infos[2] = {};
+        uint32_t stage_count = 0;
+        if (program->m_ComputeModule)
+        {
+            vk_stage_create_infos[stage_count++] = program->m_ComputeModule->m_PipelineStageInfo;
+        }
+        if (program->m_VertexModule)
+        {
+            vk_stage_create_infos[stage_count++] = program->m_VertexModule->m_PipelineStageInfo;
+        }
+        if (program->m_FragmentModule)
+        {
+            vk_stage_create_infos[stage_count++] = program->m_FragmentModule->m_PipelineStageInfo;
+        }
+
         VkGraphicsPipelineCreateInfo vk_pipeline_info;
         memset(&vk_pipeline_info, 0, sizeof(vk_pipeline_info));
 
         vk_pipeline_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        vk_pipeline_info.stageCount          = sizeof(program->m_PipelineStageInfo) / sizeof(VkPipelineShaderStageCreateInfo);
-        vk_pipeline_info.pStages             = program->m_PipelineStageInfo;
+        vk_pipeline_info.stageCount          = stage_count;
+        vk_pipeline_info.pStages             = vk_stage_create_infos;
         vk_pipeline_info.pVertexInputState   = &vk_vertex_input_info;
         vk_pipeline_info.pInputAssemblyState = &vk_input_assembly;
         vk_pipeline_info.pViewportState      = &vk_viewport_state;

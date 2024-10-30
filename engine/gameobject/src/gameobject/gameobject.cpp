@@ -26,15 +26,21 @@
 #include <dlib/math.h>
 #include <dlib/vmath.h>
 #include <dlib/mutex.h>
-#include <dmsdk/dlib/vmath.h>
 #include <ddf/ddf.h>
 #include "gameobject.h"
 #include "gameobject_script.h"
 #include "gameobject_private.h"
 #include "gameobject_props_lua.h"
 #include "gameobject_props_ddf.h"
+#include "gameobject_props.h"
 
-#include "../proto/gameobject/gameobject_ddf.h"
+#include "gameobject/gameobject_ddf.h"
+
+#include <dmsdk/dlib/vmath.h>
+#include <dmsdk/resource/resource.h>
+
+#include <dmsdk/dlib/vmath.h>
+#include <dmsdk/resource/resource.hpp>
 
 DM_PROPERTY_GROUP(rmtp_GameObject, "Gameobjects");
 
@@ -46,6 +52,7 @@ namespace dmGameObject
     const char* COLLECTION_MAX_INSTANCES_KEY = "collection.max_instances";
     const char* COLLECTION_MAX_INPUT_STACK_ENTRIES_KEY = "collection.max_input_stack_entries";
     const dmhash_t UNNAMED_IDENTIFIER = dmHashBuffer64("__unnamed__", strlen("__unnamed__"));
+    const dmhash_t GAME_OBJECT_EXT = dmHashString64("goc");
     const char* ID_SEPARATOR = "/";
     const uint32_t MAX_DISPATCH_ITERATION_COUNT = 10;
 
@@ -74,7 +81,7 @@ namespace dmGameObject
     PROP_VECTOR3(EULER, euler);
     PROP_VECTOR3(SCALE, scale);
 
-    static void ResourceReloadedCallback(const dmResource::ResourceReloadedParams& params);
+    static void ResourceReloadedCallback(const ResourceReloadedParams* params);
     static void DoDeleteInstance(Collection* collection, HInstance instance);
     static bool InitInstance(Collection* collection, HInstance instance);
     static bool FinalInstance(Collection* collection, HInstance instance);
@@ -93,6 +100,10 @@ namespace dmGameObject
     {
         memset(this, 0, sizeof(InputAction));
     }
+
+    PropertyOptions::PropertyOptions()
+    : m_Index(0)
+    , m_HasKey(0) {}
 
     PropertyVar::PropertyVar()
     {
@@ -239,7 +250,7 @@ namespace dmGameObject
     Result SetCollectionDefaultCapacity(HRegister regist, uint32_t capacity)
     {
         assert(regist != 0x0);
-        if(capacity >= INVALID_INSTANCE_INDEX-1)
+        if(capacity >= INVALID_INSTANCE_INDEX - 1 || capacity == 0)
             return RESULT_INVALID_OPERATION;
         regist->m_DefaultCollectionCapacity = capacity;
         return RESULT_OK;
@@ -294,7 +305,7 @@ namespace dmGameObject
         dmMutex::Lock(collection->m_Mutex);
         for (int i = 0; i < collection->m_DynamicResources.Size(); ++i)
         {
-            dmResource::SResourceDescriptor* rd = dmResource::FindByHash(collection->m_Factory, collection->m_DynamicResources[i]);
+            HResourceDescriptor rd = dmResource::FindByHash(collection->m_Factory, collection->m_DynamicResources[i]);
             assert(rd);
             void* resource = dmResource::GetResource(rd);
             dmResource::Release(collection->m_Factory, resource);
@@ -316,6 +327,18 @@ namespace dmGameObject
             DeleteCollection(collection);
         }
         regist->m_Collections.SetSize(0);
+    }
+
+    HCollection GetCollectionByHash(HRegister regist, dmhash_t socket_name)
+    {
+        uint32_t collection_count = regist->m_Collections.Size();
+        for (uint32_t i = 0; i < collection_count; ++i)
+        {
+            Collection* collection = regist->m_Collections[i];
+            if (collection->m_NameHash == socket_name)
+                return collection->m_HCollection;
+        }
+        return 0;
     }
 
     void DeleteRegister(HRegister regist)
@@ -343,7 +366,16 @@ namespace dmGameObject
 
     Collection* AllocCollection(const char* name, HRegister regist, uint32_t max_instances, dmGameObjectDDF::CollectionDesc* collection_desc)
     {
-        Collection* collection = new Collection(0, 0, max_instances, GetInputStackDefaultCapacity(regist));
+        uint32_t instances_in_collection = GetMaxComponentInstances(GAME_OBJECT_EXT, collection_desc);
+        if (instances_in_collection == 0)
+        {
+            instances_in_collection = max_instances;
+        }
+        else
+        {
+            instances_in_collection = dmMath::Min(max_instances, instances_in_collection);
+        }
+        Collection* collection = new Collection(0, 0, instances_in_collection, GetInputStackDefaultCapacity(regist));
         collection->m_Mutex = dmMutex::New();
 
         for (uint32_t i = 0; i < regist->m_ComponentTypeCount; ++i)
@@ -354,7 +386,7 @@ namespace dmGameObject
                 params.m_Context = regist->m_ComponentTypes[i].m_Context;
                 params.m_ComponentIndex = i;
                 params.m_MaxComponentInstances = GetMaxComponentInstances(regist->m_ComponentTypes[i].m_NameHash, collection_desc);
-                params.m_MaxInstances = max_instances;
+                params.m_MaxInstances = instances_in_collection;
                 params.m_World = &collection->m_ComponentWorlds[i];
                 regist->m_ComponentTypes[i].m_NewWorldFunction(params);
             }
@@ -471,7 +503,7 @@ namespace dmGameObject
     {
         if (max_instances > INVALID_INSTANCE_INDEX)
         {
-            dmLogError("max_instances must be less or equal to %d", INVALID_INSTANCE_INDEX);
+            dmLogError("max_instances must be less or equal to %d", INVALID_INSTANCE_INDEX - 1);
             return 0;
         }
 
@@ -481,7 +513,7 @@ namespace dmGameObject
             return 0;
         }
 
-        collection->m_NameHash = dmHashString64(name);
+        collection->m_NameHash = dmHashString64(name); // Same as the socket name
 
         HCollection hcollection = (HCollection)new CollectionHandle;
         Result result = AttachCollection(collection, name, factory, regist, hcollection);
@@ -551,7 +583,7 @@ namespace dmGameObject
         return 0xFFFFFFFF;
     }
 
-    void* GetWorld(HCollection hcollection, uint32_t component_type_index)
+    HComponentWorld GetWorld(HCollection hcollection, uint32_t component_type_index)
     {
         Register* regist = GetRegister(hcollection);
         if (component_type_index < regist->m_ComponentTypeCount)
@@ -578,7 +610,7 @@ namespace dmGameObject
         }
     }
 
-    ComponentType* FindComponentType(Register* regist, dmResource::ResourceType resource_type, uint32_t* index)
+    ComponentType* FindComponentType(Register* regist, HResourceType resource_type, uint32_t* index)
     {
         for (uint32_t i = 0; i < regist->m_ComponentTypeCount; ++i)
         {
@@ -634,7 +666,7 @@ namespace dmGameObject
         return RESULT_OK;
     }
 
-    Result SetUpdateOrderPrio(HRegister regist, dmResource::ResourceType resource_type, uint16_t prio)
+    Result SetUpdateOrderPrio(HRegister regist, HResourceType resource_type, uint16_t prio)
     {
         bool found = false;
         for (uint32_t i = 0; i < regist->m_ComponentTypeCount; ++i)
@@ -1099,7 +1131,7 @@ namespace dmGameObject
         return result;
     }
 
-    static bool SetScriptPropertiesFromBuffer(HInstance instance, const char *prototype_name, uint8_t* property_buffer, uint32_t property_buffer_size)
+    static bool SetScriptPropertiesFromBuffer(HInstance instance, const char *prototype_name, HPropertyContainer property_container)
     {
         uint32_t next_component_instance_data = 0;
         Prototype::Component* components = instance->m_Prototype->m_Components;
@@ -1119,14 +1151,13 @@ namespace dmGameObject
                 params.m_Instance = instance;
                 params.m_UserData = component_instance_data;
 
-                params.m_PropertySet.m_UserData = (uintptr_t)CreatePropertyContainerFromLua(component_type->m_Context, property_buffer, property_buffer_size);
-                if (params.m_PropertySet.m_UserData == 0x0)
-                {
-                    dmLogError("Could not load properties parameters when spawning '%s'.", prototype_name);
-                    return false;
-                }
+                if (property_container)
+                    params.m_PropertySet.m_UserData = (uintptr_t)dmGameObject::PropertyContainerCopy(property_container);
+                else
+                    params.m_PropertySet.m_UserData = 0;
+
                 params.m_PropertySet.m_GetPropertyCallback = PropertyContainerGetPropertyCallback;
-                params.m_PropertySet.m_FreeUserDataCallback = DestroyPropertyContainerCallback;
+                params.m_PropertySet.m_FreeUserDataCallback = PropertyContainerDestroyCallback;
                 PropertyResult result = component.m_Type->m_SetPropertiesFunction(params);
                 if (result != PROPERTY_RESULT_OK)
                 {
@@ -1139,7 +1170,7 @@ namespace dmGameObject
     }
 
     // Supplied 'proto' will be released after this function is done.
-    static HInstance SpawnInternal(Collection* collection, Prototype *proto, const char *prototype_name, dmhash_t id, uint8_t* property_buffer, uint32_t property_buffer_size, const Point3& position, const Quat& rotation, const Vector3& scale)
+    static HInstance SpawnInternal(Collection* collection, Prototype *proto, const char *prototype_name, dmhash_t id, HPropertyContainer property_container, const Point3& position, const Quat& rotation, const Vector3& scale)
     {
         if (collection->m_ToBeDeleted) {
             dmLogWarning("Spawning is not allowed when the collection is being deleted.");
@@ -1176,7 +1207,7 @@ namespace dmGameObject
             return 0;
         }
 
-        success = SetScriptPropertiesFromBuffer(instance, prototype_name, property_buffer, property_buffer_size);
+        success = SetScriptPropertiesFromBuffer(instance, prototype_name, property_container);
 
         if (success && !InitInstance(collection, instance))
         {
@@ -1487,7 +1518,7 @@ namespace dmGameObject
                             const dmGameObjectDDF::ComponentPropertyDesc& comp_prop = instance_desc.m_ComponentProperties[prop_i];
                             if (dmHashString64(comp_prop.m_Id) == component.m_Id)
                             {
-                                ddf_properties = CreatePropertyContainerFromDDF(&comp_prop.m_PropertyDecls);
+                                ddf_properties = PropertyContainerCreateFromDDF(&comp_prop.m_PropertyDecls);
                                 if (ddf_properties == 0x0)
                                 {
                                     DM_HASH_REVERSE_MEM(hash_ctx, 256);
@@ -1499,37 +1530,30 @@ namespace dmGameObject
                         }
 
                         HPropertyContainer lua_properties = 0x0;
-                        InstancePropertyBuffer *instance_properties = property_buffers->Get(dmHashString64(instance_desc.m_Id));
+                        HPropertyContainer* instance_properties = property_buffers->Get(dmHashString64(instance_desc.m_Id));
                         if (instance_properties != 0x0)
                         {
                             if (strcmp(type->m_Name, "scriptc") == 0)
                             {
-                                void* component_context = type->m_Context;
-                                uint8_t* instance_properties_buffer = instance_properties->property_buffer;
-                                uint32_t instance_properties_buffer_size = instance_properties->property_buffer_size;
-
-                                lua_properties = CreatePropertyContainerFromLua(component_context, instance_properties_buffer, instance_properties_buffer_size);
-                                if (lua_properties == 0x0)
-                                {
-                                    dmLogError("Could not read script properties parameters for the component '%s' in game object '%s' in collection '%s'", dmHashReverseSafe64(component.m_Id), instance_desc.m_Id, collection_desc->m_Name);
-                                    success = false;
-                                }
+                                // TODO: Investigate if it's enough to have one property set, (to save time/memory)
+                                // and only register the Free function once (letting the first instance "own" it)
+                                lua_properties = PropertyContainerCopy(*instance_properties);
                             }
                         }
 
                         if (!success)
                         {
-                            DestroyPropertyContainer(lua_properties);
-                            DestroyPropertyContainer(ddf_properties);
+                            PropertyContainerDestroy(lua_properties);
+                            PropertyContainerDestroy(ddf_properties);
                             break;
                         }
 
                         HPropertyContainer properties = 0x0;
                         if (ddf_properties != 0x0 && lua_properties !=0x0)
                         {
-                            properties = MergePropertyContainers(ddf_properties, lua_properties);
-                            DestroyPropertyContainer(lua_properties);
-                            DestroyPropertyContainer(ddf_properties);
+                            properties = PropertyContainerMerge(ddf_properties, lua_properties);
+                            PropertyContainerDestroy(lua_properties);
+                            PropertyContainerDestroy(ddf_properties);
                             if (properties == 0x0)
                             {
                                 DM_HASH_REVERSE_MEM(hash_ctx, 256);
@@ -1549,7 +1573,7 @@ namespace dmGameObject
                         if (properties != 0x0)
                         {
                             params.m_PropertySet.m_GetPropertyCallback = PropertyContainerGetPropertyCallback;
-                            params.m_PropertySet.m_FreeUserDataCallback = DestroyPropertyContainerCallback;
+                            params.m_PropertySet.m_FreeUserDataCallback = PropertyContainerDestroyCallback;
                             params.m_PropertySet.m_UserData = (uintptr_t)properties;
                         }
 
@@ -1561,7 +1585,7 @@ namespace dmGameObject
                         {
                             DM_HASH_REVERSE_MEM(hash_ctx, 256);
                             dmLogError("Could not load properties for component '%s' when spawning '%s' in collection '%s'.", dmHashReverseSafe64Alloc(&hash_ctx, component.m_Id), instance_desc.m_Id, collection_desc->m_Name);
-                            DestroyPropertyContainer(properties);
+                            PropertyContainerDestroy(properties);
                             success = false;
                             break;
                         }
@@ -1623,14 +1647,14 @@ namespace dmGameObject
         return success;
     }
 
-    HInstance Spawn(HCollection hcollection, HPrototype proto, const char* prototype_name, dmhash_t id, uint8_t* property_buffer, uint32_t property_buffer_size, const Point3& position, const Quat& rotation, const Vector3& scale)
+    HInstance Spawn(HCollection hcollection, HPrototype proto, const char* prototype_name, dmhash_t id, HPropertyContainer property_container, const Point3& position, const Quat& rotation, const Vector3& scale)
     {
         if (proto == 0x0) {
             dmLogError("No prototype to spawn from.");
             return 0x0;
         }
 
-        HInstance instance = SpawnInternal(hcollection->m_Collection, proto, prototype_name, id, property_buffer, property_buffer_size, position, rotation, scale);
+        HInstance instance = SpawnInternal(hcollection->m_Collection, proto, prototype_name, id, property_container, position, rotation, scale);
 
         if (instance == 0) {
             dmLogError("Could not spawn an instance of prototype %s.", prototype_name);
@@ -1712,7 +1736,7 @@ namespace dmGameObject
         {
             if (instance->m_Initialized)
             {
-                dmLogWarning("Instance is initialized twice, this may lead to undefined behaviour.");
+                dmLogWarning("Instance '%s' is initialized twice, this may lead to undefined behaviour.", dmHashReverseSafe64(instance->m_Identifier));
             }
             else
             {
@@ -2084,6 +2108,60 @@ namespace dmGameObject
         return RESULT_COMPONENT_NOT_FOUND;
     }
 
+    Result GetComponent(HInstance instance, dmhash_t component_id, uint32_t* component_type, HComponent* out_component, HComponentWorld* out_world)
+    {
+        // TODO: We should probably not store user-data sparse.
+        // A lot of loops just to find user-data such as the code below
+        assert(instance != 0x0);
+        const Prototype::Component* components = instance->m_Prototype->m_Components;
+        uint32_t n = instance->m_Prototype->m_ComponentCount;
+        uint32_t component_instance_data = 0;
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            const Prototype::Component* component = &components[i];
+            const ComponentType* type = component->m_Type;
+            if (component->m_Id == component_id)
+            {
+                *component_type = component->m_TypeIndex;
+
+                dmGameObject::HComponentInternal user_data = 0;
+                if (type->m_InstanceHasUserData)
+                {
+                    user_data = instance->m_ComponentInstanceUserData[component_instance_data];
+                }
+
+                dmGameObject::HComponentWorld world = 0;
+                if (type->m_GetFunction || (out_world != 0))
+                {
+                    world = GetWorld(GetCollection(instance), component->m_TypeIndex);
+                }
+
+                if (type->m_GetFunction)
+                {
+                    ComponentGetParams params = {world, user_data};
+                    *out_component = (dmGameObject::HComponent)type->m_GetFunction(params);
+                }
+                else
+                {
+                    *out_component = (dmGameObject::HComponent)user_data;
+                }
+
+                if (out_world != 0)
+                {
+                    *out_world = world;
+                }
+                return RESULT_OK;
+            }
+
+            if (type->m_InstanceHasUserData)
+            {
+                component_instance_data++;
+            }
+        }
+
+        return RESULT_COMPONENT_NOT_FOUND;
+    }
+
     bool ScaleAlongZ(HInstance instance)
     {
         return instance->m_ScaleAlongZ != 0;
@@ -2167,23 +2245,7 @@ namespace dmGameObject
         DispatchMessagesContext* context = (DispatchMessagesContext*) user_ptr;
         Collection* collection = context->m_Collection;
 
-        Instance* instance = 0x0;
-        // Start by looking for the instance in the user-data,
-        // which is the case when an instance sends to itself.
-        if (message->m_UserData1 != 0
-                && message->m_Sender.m_Socket == message->m_Receiver.m_Socket
-                && message->m_Sender.m_Path == message->m_Receiver.m_Path)
-        {
-            Instance* user_data_instance = (Instance*)message->m_UserData1;
-            if (message->m_Receiver.m_Path == user_data_instance->m_Identifier)
-            {
-                instance = user_data_instance;
-            }
-        }
-        if (instance == 0x0)
-        {
-            instance = GetInstanceFromIdentifier(context->m_Collection, message->m_Receiver.m_Path);
-        }
+        Instance* instance = GetInstanceFromIdentifier(collection, message->m_Receiver.m_Path);
         if (instance == 0x0)
         {
             DM_HASH_REVERSE_MEM(hash_ctx, 512);
@@ -3679,9 +3741,9 @@ namespace dmGameObject
         DoAddToUpdate(collection, new_instance);
     }
 
-    static void ResourceReloadedCallback(const dmResource::ResourceReloadedParams& params)
+    static void ResourceReloadedCallback(const ResourceReloadedParams* params)
     {
-        Collection* collection = (Collection*) params.m_UserData;
+        Collection* collection = (Collection*) params->m_UserData;
         for (uint32_t level_i = 0; level_i < MAX_HIERARCHICAL_DEPTH; ++level_i)
         {
             dmArray<uint16_t>& level = collection->m_LevelIndices[level_i];
@@ -3690,15 +3752,17 @@ namespace dmGameObject
             {
                 uint16_t index = level[i];
                 Instance* instance = collection->m_Instances[index];
-                if (instance->m_Prototype == params.m_Resource->m_Resource) {
-                    RecreateInstance(collection, index, (Prototype*)params.m_Resource->m_PrevResource, (Prototype*)params.m_Resource->m_Resource, params.m_Name);
+                Prototype* prototype = (Prototype*)ResourceDescriptorGetResource(params->m_Resource);
+                if (instance->m_Prototype == prototype) {
+                    Prototype* prev_prototype = (Prototype*)ResourceDescriptorGetPrevResource(params->m_Resource);
+                    RecreateInstance(collection, index, prev_prototype, prototype, params->m_Filename);
                 } else {
                     uint32_t next_component_instance_data = 0;
                     for (uint32_t j = 0; j < instance->m_Prototype->m_ComponentCount; ++j)
                     {
                         Prototype::Component& component = instance->m_Prototype->m_Components[j];
                         ComponentType* type = component.m_Type;
-                        if (component.m_ResourceId == params.m_Resource->m_NameHash)
+                        if (component.m_ResourceId == ResourceDescriptorGetNameHash(params->m_Resource))
                         {
                             if (type->m_OnReloadFunction)
                             {
@@ -3709,7 +3773,7 @@ namespace dmGameObject
                                 }
                                 ComponentOnReloadParams on_reload_params;
                                 on_reload_params.m_Instance = instance;
-                                on_reload_params.m_Resource = params.m_Resource->m_Resource;
+                                on_reload_params.m_Resource = prototype;
                                 on_reload_params.m_World = collection->m_ComponentWorlds[component.m_TypeIndex];
                                 on_reload_params.m_Context = type->m_Context;
                                 on_reload_params.m_UserData = user_data;

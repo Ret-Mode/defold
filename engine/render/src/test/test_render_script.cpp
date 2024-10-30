@@ -50,22 +50,55 @@ namespace
     }
 }
 
+static inline dmGraphics::ShaderDesc::Shader MakeDDFShader(const char* data, uint32_t count, dmGraphics::ShaderDesc::Language language)
+{
+    dmGraphics::ShaderDesc::Shader ddf;
+    memset(&ddf,0,sizeof(ddf));
+    ddf.m_Source.m_Data  = (uint8_t*)data;
+    ddf.m_Source.m_Count = count;
+    ddf.m_Language = language;
+    return ddf;
+}
+
+static inline dmGraphics::ShaderDesc MakeDDFShaderDesc(dmGraphics::ShaderDesc::Shader* shader, dmGraphics::ShaderDesc::ShaderType type)
+{
+    dmGraphics::ShaderDesc ddf;
+    memset(&ddf,0,sizeof(ddf));
+    ddf.m_Shaders.m_Data = shader;
+    ddf.m_Shaders.m_Count = 1;
+    ddf.m_ShaderType = type;
+    return ddf;
+}
+
+static dmRender::FontGlyph* GetGlyph(uint32_t utf8, void* user_ctx)
+{
+    dmRender::FontGlyph* glyphs = (dmRender::FontGlyph*)user_ctx;
+    return &glyphs[utf8];
+}
+
+static void* GetGlyphData(uint32_t codepoint, void* user_ctx, uint32_t* out_size, uint32_t* out_compression, uint32_t* out_width, uint32_t* out_height)
+{
+    return 0;
+}
+
+
 class dmRenderScriptTest : public jc_test_base_class
 {
 protected:
-    dmPlatform::HWindow m_Window;
-    dmScript::HContext m_ScriptContext;
-    dmRender::HRenderContext m_Context;
-    dmGraphics::HContext m_GraphicsContext;
-    dmRender::HFontMap m_SystemFontMap;
-    dmRender::HMaterial m_FontMaterial;
-    dmGraphics::HVertexProgram m_VertexProgram;
+    dmPlatform::HWindow          m_Window;
+    dmScript::HContext           m_ScriptContext;
+    dmRender::HRenderContext     m_Context;
+    dmGraphics::HContext         m_GraphicsContext;
+    dmRender::HFontMap           m_SystemFontMap;
+    dmRender::HMaterial          m_FontMaterial;
+    dmRender::FontGlyph          m_Glyphs[128];
+
+    dmGraphics::HVertexProgram   m_VertexProgram;
     dmGraphics::HFragmentProgram m_FragmentProgram;
+    dmGraphics::HComputeProgram  m_ComputeProgram;
 
     virtual void SetUp()
     {
-        m_ScriptContext = dmScript::NewContext(0, 0, true);
-        dmScript::Initialize(m_ScriptContext);
         dmGraphics::InstallAdapter();
 
         dmPlatform::WindowParams win_params = {};
@@ -81,38 +114,57 @@ protected:
         graphics_context_params.m_Window = m_Window;
 
         m_GraphicsContext = dmGraphics::NewContext(graphics_context_params);
+
+        dmScript::ContextParams script_context_params = {};
+        script_context_params.m_GraphicsContext = m_GraphicsContext;
+        m_ScriptContext = dmScript::NewContext(script_context_params);
+        dmScript::Initialize(m_ScriptContext);
+
         dmRender::FontMapParams font_map_params;
         font_map_params.m_CacheWidth = 128;
         font_map_params.m_CacheHeight = 128;
         font_map_params.m_CacheCellWidth = 8;
         font_map_params.m_CacheCellHeight = 8;
-        font_map_params.m_Glyphs.SetCapacity(128);
-        font_map_params.m_Glyphs.SetSize(128);
-        memset((void*)&font_map_params.m_Glyphs[0], 0, sizeof(dmRender::Glyph)*128);
-        for (uint32_t i = 0; i < 128; ++i)
-        {
-            font_map_params.m_Glyphs[i].m_Width = 1;
-            font_map_params.m_Glyphs[i].m_Character = i;
-        }
+        font_map_params.m_GetGlyph = GetGlyph;
+        font_map_params.m_GetGlyphData = GetGlyphData;
+
         m_SystemFontMap = dmRender::NewFontMap(m_GraphicsContext, font_map_params);
+
+        memset(m_Glyphs, 0, sizeof(m_Glyphs));
+        for (uint32_t i = 0; i < DM_ARRAY_SIZE(m_Glyphs); ++i)
+        {
+            m_Glyphs[i].m_Width = 1;
+            m_Glyphs[i].m_Character = i;
+        }
+        dmRender::SetFontMapUserData(m_SystemFontMap, m_Glyphs);
+
         dmRender::RenderContextParams params;
         params.m_ScriptContext = m_ScriptContext;
         params.m_SystemFontMap = m_SystemFontMap;
         params.m_MaxRenderTargets = 1;
         params.m_MaxInstances = 64;
         params.m_MaxCharacters = 32;
+        params.m_MaxBatches = 128;
         m_Context = dmRender::NewRenderContext(m_GraphicsContext, params);
 
-        dmGraphics::ShaderDesc::Shader shader_ddf;
-        memset(&shader_ddf,0,sizeof(shader_ddf));
-        shader_ddf.m_Source.m_Data  = (uint8_t*)"foo";
-        shader_ddf.m_Source.m_Count = 3;
+        dmGraphics::ShaderDesc::Shader shader_ddf = MakeDDFShader("foo", 3, dmGraphics::ShaderDesc::LANGUAGE_GLSL_SM140);
+        dmGraphics::ShaderDesc vs_desc            = MakeDDFShaderDesc(&shader_ddf, dmGraphics::ShaderDesc::SHADER_TYPE_VERTEX);
+        dmGraphics::ShaderDesc fs_desc            = MakeDDFShaderDesc(&shader_ddf, dmGraphics::ShaderDesc::SHADER_TYPE_FRAGMENT);
 
-        m_VertexProgram = dmGraphics::NewVertexProgram(m_GraphicsContext, &shader_ddf);
-        m_FragmentProgram = dmGraphics::NewFragmentProgram(m_GraphicsContext, &shader_ddf);
+        m_VertexProgram = dmGraphics::NewVertexProgram(m_GraphicsContext, &vs_desc, 0, 0);
+        m_FragmentProgram = dmGraphics::NewFragmentProgram(m_GraphicsContext, &fs_desc, 0, 0);
 
         m_FontMaterial = dmRender::NewMaterial(m_Context, m_VertexProgram, m_FragmentProgram);
         dmRender::SetFontMapMaterial(m_SystemFontMap, m_FontMaterial);
+
+        const char* compute_program_src =
+            "#version 430\n"
+            "uniform vec4 tint;\n"
+            "uniform sampler2D texture_sampler\n";
+
+        dmGraphics::ShaderDesc::Shader compute_shader_ddf = MakeDDFShader(compute_program_src, strlen(compute_program_src), dmGraphics::ShaderDesc::LANGUAGE_GLSL_SM430);
+        dmGraphics::ShaderDesc compute_desc = MakeDDFShaderDesc(&compute_shader_ddf, dmGraphics::ShaderDesc::SHADER_TYPE_COMPUTE);
+        m_ComputeProgram = dmGraphics::NewComputeProgram(m_GraphicsContext, &compute_desc, 0, 0);
     }
 
     virtual void TearDown()
@@ -313,16 +365,16 @@ TEST_F(dmRenderScriptTest, TestLuaState)
 {
     const char* script =
     "function update(self)\n"
-    "    render.enable_state(render.STATE_BLEND)\n"
-    "    render.disable_state(render.STATE_BLEND)\n"
-    "    render.set_blend_func(render.BLEND_ONE, render.BLEND_SRC_COLOR)\n"
+    "    render.enable_state(graphics.STATE_BLEND)\n"
+    "    render.disable_state(graphics.STATE_BLEND)\n"
+    "    render.set_blend_func(graphics.BLEND_FACTOR_ONE, graphics.BLEND_FACTOR_SRC_COLOR)\n"
     "    render.set_color_mask(true, true, true, true)\n"
     "    render.set_depth_mask(true)\n"
-    "    render.set_depth_func(render.COMPARE_FUNC_GEQUAL)\n"
+    "    render.set_depth_func(graphics.COMPARE_FUNC_GEQUAL)\n"
     "    render.set_stencil_mask(1)\n"
-    "    render.set_stencil_func(render.COMPARE_FUNC_ALWAYS, 1, 2)\n"
-    "    render.set_stencil_op(render.STENCIL_OP_REPLACE, render.STENCIL_OP_KEEP, render.STENCIL_OP_INVERT)\n"
-    "    render.set_cull_face(render.FACE_BACK)\n"
+    "    render.set_stencil_func(graphics.COMPARE_FUNC_ALWAYS, 1, 2)\n"
+    "    render.set_stencil_op(graphics.STENCIL_OP_REPLACE, graphics.STENCIL_OP_KEEP, graphics.STENCIL_OP_INVERT)\n"
+    "    render.set_cull_face(graphics.FACE_TYPE_BACK)\n"
     "    render.set_polygon_offset(1, 2)\n"
     "end\n";
     dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
@@ -398,15 +450,15 @@ TEST_F(dmRenderScriptTest, TestLuaRenderTargetTooLarge)
     const char* script =
     "function init(self)\n"
     "    local params_color = {\n"
-    "        format = render.FORMAT_RGBA,\n"
+    "        format = graphics.TEXTURE_FORMAT_RGBA,\n"
     "        width = 1000000000,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
-    "    self.rt = render.render_target({[render.BUFFER_COLOR_BIT] = params_color})\n"
+    "    self.rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = params_color})\n"
     "end\n";
 
     dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
@@ -421,49 +473,49 @@ TEST_F(dmRenderScriptTest, TestLuaRenderTarget)
     const char* script =
     "function update(self)\n"
     "    local params_color = {\n"
-    "        format = render.FORMAT_RGBA,\n"
+    "        format = graphics.TEXTURE_FORMAT_RGBA,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
     "    local params_depth = {\n"
-    "        format = render.FORMAT_DEPTH,\n"
+    "        format = graphics.TEXTURE_FORMAT_DEPTH,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
     "    local params_stencil = {\n"
-    "        format = render.FORMAT_STENCIL,\n"
+    "        format = graphics.TEXTURE_FORMAT_STENCIL,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
-    "    self.rt = render.render_target({[render.BUFFER_COLOR_BIT] = params_color, [render.BUFFER_DEPTH_BIT] = params_depth, [render.BUFFER_STENCIL_BIT] = params_stencil})\n"
-    "    render.set_render_target(self.rt, {transient = {render.BUFFER_DEPTH_BIT, render.BUFFER_STENCIL_BIT}})\n"
+    "    self.rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = params_color, [graphics.BUFFER_TYPE_DEPTH_BIT] = params_depth, [graphics.BUFFER_TYPE_STENCIL_BIT] = params_stencil})\n"
+    "    render.set_render_target(self.rt, {transient = {graphics.BUFFER_TYPE_DEPTH_BIT, graphics.BUFFER_TYPE_STENCIL_BIT}})\n"
     "    render.set_render_target(self.rt)\n"
     "    render.set_render_target_size(self.rt, 3, 4)\n"
-            " local rt_w = render.get_render_target_width(self.rt, render.BUFFER_COLOR_BIT)\n"
+            " local rt_w = render.get_render_target_width(self.rt, graphics.BUFFER_TYPE_COLOR0_BIT)\n"
             " assert(rt_w == 3)\n"
-            " local rt_h = render.get_render_target_height(self.rt, render.BUFFER_COLOR_BIT)\n"
+            " local rt_h = render.get_render_target_height(self.rt, graphics.BUFFER_TYPE_COLOR0_BIT)\n"
             " assert(rt_h == 4)\n"
-            " local rt_w = render.get_render_target_width(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_w = render.get_render_target_width(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_w == 3)\n"
-            " local rt_h = render.get_render_target_height(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_h = render.get_render_target_height(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_h == 4)\n"
-            " local rt_w = render.get_render_target_width(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_w = render.get_render_target_width(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_w == 3)\n"
-            " local rt_h = render.get_render_target_height(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_h = render.get_render_target_height(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_h == 4)\n"
-    "    render.set_render_target(nil, {transient = {render.BUFFER_COLOR_BIT}})\n"
+    "    render.set_render_target(nil, {transient = {graphics.BUFFER_TYPE_COLOR0_BIT}})\n"
     "    render.delete_render_target(self.rt)\n"
     "    render.set_render_target(nil, {transient = {}})\n"
     "    render.set_render_target(nil, {})\n"
@@ -513,47 +565,47 @@ TEST_F(dmRenderScriptTest, TestLuaRenderTargetDeprecated)
     const char* script =
     "function update(self)\n"
     "    local params_color = {\n"
-    "        format = render.FORMAT_RGBA,\n"
+    "        format = graphics.TEXTURE_FORMAT_RGBA,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
     "    local params_depth = {\n"
-    "        format = render.FORMAT_DEPTH,\n"
+    "        format = graphics.TEXTURE_FORMAT_DEPTH,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
     "    local params_stencil = {\n"
-    "        format = render.FORMAT_STENCIL,\n"
+    "        format = graphics.TEXTURE_FORMAT_STENCIL,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
-    "    self.rt = render.render_target({[render.BUFFER_COLOR_BIT] = params_color, [render.BUFFER_DEPTH_BIT] = params_depth, [render.BUFFER_STENCIL_BIT] = params_stencil})\n"
+    "    self.rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = params_color, [graphics.BUFFER_TYPE_DEPTH_BIT] = params_depth, [graphics.BUFFER_TYPE_STENCIL_BIT] = params_stencil})\n"
     "    render.enable_render_target(self.rt)\n"
     "    render.disable_render_target(self.rt)\n"
     "    render.set_render_target_size(self.rt, 3, 4)\n"
-            " local rt_w = render.get_render_target_width(self.rt, render.BUFFER_COLOR_BIT)\n"
+            " local rt_w = render.get_render_target_width(self.rt, graphics.BUFFER_TYPE_COLOR0_BIT)\n"
             " assert(rt_w == 3)\n"
-            " local rt_h = render.get_render_target_height(self.rt, render.BUFFER_COLOR_BIT)\n"
+            " local rt_h = render.get_render_target_height(self.rt, graphics.BUFFER_TYPE_COLOR0_BIT)\n"
             " assert(rt_h == 4)\n"
-            " local rt_w = render.get_render_target_width(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_w = render.get_render_target_width(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_w == 3)\n"
-            " local rt_h = render.get_render_target_height(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_h = render.get_render_target_height(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_h == 4)\n"
-            " local rt_w = render.get_render_target_width(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_w = render.get_render_target_width(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_w == 3)\n"
-            " local rt_h = render.get_render_target_height(self.rt, render.BUFFER_DEPTH_BIT)\n"
+            " local rt_h = render.get_render_target_height(self.rt, graphics.BUFFER_TYPE_DEPTH_BIT)\n"
             " assert(rt_h == 4)\n"
 
     "    render.delete_render_target(self.rt)\n"
@@ -585,15 +637,15 @@ TEST_F(dmRenderScriptTest, TestLuaRenderTargetRequiredKeys)
     const char* script =
     "function init(self)\n"
     "    local params_color = {\n"
-    //"        format = render.FORMAT_RGBA,\n"
+    //"        format = graphics.TEXTURE_FORMAT_RGBA,\n"
     "        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
-    "    self.rt = render.render_target({[render.BUFFER_COLOR_BIT] = params_color})\n"
+    "    self.rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = params_color})\n"
     "end\n";
 
     dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
@@ -605,15 +657,15 @@ TEST_F(dmRenderScriptTest, TestLuaRenderTargetRequiredKeys)
     script =
     "function init(self)\n"
     "    local params_color = {\n"
-    "        format = render.FORMAT_RGBA,\n"
+    "        format = graphics.TEXTURE_FORMAT_RGBA,\n"
     //"        width = 1,\n"
     "        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
-    "    self.rt = render.render_target({[render.BUFFER_COLOR_BIT] = params_color})\n"
+    "    self.rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = params_color})\n"
     "end\n";
 
     render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
@@ -625,15 +677,15 @@ TEST_F(dmRenderScriptTest, TestLuaRenderTargetRequiredKeys)
     script =
     "function init(self)\n"
     "    local params_color = {\n"
-    "        format = render.FORMAT_RGBA,\n"
+    "        format = graphics.TEXTURE_FORMAT_RGBA,\n"
     "        width = 1,\n"
     //"        height = 2,\n"
-    "        min_filter = render.FILTER_NEAREST,\n"
-    "        mag_filter = render.FILTER_LINEAR,\n"
-    "        u_wrap = render.WRAP_REPEAT,\n"
-    "        v_wrap = render.WRAP_MIRRORED_REPEAT\n"
+    "        min_filter = graphics.TEXTURE_FILTER_NEAREST,\n"
+    "        mag_filter = graphics.TEXTURE_FILTER_LINEAR,\n"
+    "        u_wrap = graphics.TEXTURE_WRAP_REPEAT,\n"
+    "        v_wrap = graphics.TEXTURE_WRAP_MIRRORED_REPEAT\n"
     "    }\n"
-    "    self.rt = render.render_target({[render.BUFFER_COLOR_BIT] = params_color})\n"
+    "    self.rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = params_color})\n"
     "end\n";
 
     render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
@@ -647,7 +699,7 @@ TEST_F(dmRenderScriptTest, TestLuaClear)
 {
     const char* script =
     "function update(self)\n"
-    "    render.clear({[render.BUFFER_COLOR_BIT] = vmath.vector4(0, 0, 0, 0), [render.BUFFER_DEPTH_BIT] = 1})\n"
+    "    render.clear({[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(0, 0, 0, 0), [graphics.BUFFER_TYPE_DEPTH_BIT] = 1})\n"
     "end\n";
     dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
     dmRender::HRenderScriptInstance render_script_instance = dmRender::NewRenderScriptInstance(m_Context, render_script);
@@ -680,7 +732,7 @@ TEST_F(dmRenderScriptTest, TestStencilBufferCleared)
 {
     const char* script_no_stencil_clear =
     "function update(self)\n"
-    "    render.clear({[render.BUFFER_COLOR_BIT] = vmath.vector4(0, 0, 0, 0), [render.BUFFER_DEPTH_BIT] = 1})\n"
+    "    render.clear({[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(0, 0, 0, 0), [graphics.BUFFER_TYPE_DEPTH_BIT] = 1})\n"
     "end\n";
     dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script_no_stencil_clear));
     dmRender::HRenderScriptInstance render_script_instance = dmRender::NewRenderScriptInstance(m_Context, render_script);
@@ -694,7 +746,7 @@ TEST_F(dmRenderScriptTest, TestStencilBufferCleared)
 
     const char* script_stencil_clear =
     "function update(self)\n"
-    "    render.clear({[render.BUFFER_COLOR_BIT] = vmath.vector4(0, 0, 0, 0), [render.BUFFER_DEPTH_BIT] = 1, [render.BUFFER_STENCIL_BIT] = 0})\n"
+    "    render.clear({[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(0, 0, 0, 0), [graphics.BUFFER_TYPE_DEPTH_BIT] = 1, [graphics.BUFFER_TYPE_STENCIL_BIT] = 0})\n"
     "end\n";
     render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script_stencil_clear));
     render_script_instance = dmRender::NewRenderScriptInstance(m_Context, render_script);
@@ -1128,7 +1180,7 @@ TEST_F(dmRenderScriptTest, TestAssetHandlesValidRenderTarget)
 {
     const char* script =
         "function init(self)\n"
-        "   self.my_rt = render.render_target({[render.BUFFER_COLOR_BIT] = { format = render.FORMAT_RGBA, width = 128, height = 128 }})\n"
+        "   self.my_rt = render.render_target({[graphics.BUFFER_TYPE_COLOR0_BIT] = { format = graphics.TEXTURE_FORMAT_RGBA, width = 128, height = 128 }})\n"
         "end\n"
         "function update(self)\n"
         "    render.enable_texture(0, self.my_rt)\n"
@@ -1247,15 +1299,6 @@ TEST_F(dmRenderScriptTest, TestAssetHandlesInvalid)
 }
 */
 
-static inline dmGraphics::ShaderDesc::Shader MakeDDFShader(const char* data, uint32_t count)
-{
-    dmGraphics::ShaderDesc::Shader ddf;
-    memset(&ddf,0,sizeof(ddf));
-    ddf.m_Source.m_Data  = (uint8_t*)data;
-    ddf.m_Source.m_Count = count;
-    return ddf;
-}
-
 TEST_F(dmRenderScriptTest, TestRenderTargetResource)
 {
     const char* script =
@@ -1264,12 +1307,12 @@ TEST_F(dmRenderScriptTest, TestRenderTargetResource)
         "   assert(exp_h == render.get_render_target_height(rt, buffer))\n"
         "end\n"
         "function assert_rt_size(rt, ds, ss, c0s, c1s, c2s, c3s)\n"
-        "   assert_rt_buffer_size(rt, render.BUFFER_DEPTH_BIT, ds, ds)\n"
-        "   assert_rt_buffer_size(rt, render.BUFFER_STENCIL_BIT, ss, ss)\n"
-        "   assert_rt_buffer_size(rt, render.BUFFER_COLOR0_BIT, c0s, c0s)\n"
-        "   assert_rt_buffer_size(rt, render.BUFFER_COLOR1_BIT, c1s, c1s)\n"
-        "   assert_rt_buffer_size(rt, render.BUFFER_COLOR2_BIT, c2s, c2s)\n"
-        "   assert_rt_buffer_size(rt, render.BUFFER_COLOR3_BIT, c3s, c3s)\n"
+        "   assert_rt_buffer_size(rt, graphics.BUFFER_TYPE_DEPTH_BIT, ds, ds)\n"
+        "   assert_rt_buffer_size(rt, graphics.BUFFER_TYPE_STENCIL_BIT, ss, ss)\n"
+        "   assert_rt_buffer_size(rt, graphics.BUFFER_TYPE_COLOR0_BIT, c0s, c0s)\n"
+        "   assert_rt_buffer_size(rt, graphics.BUFFER_TYPE_COLOR1_BIT, c1s, c1s)\n"
+        "   assert_rt_buffer_size(rt, graphics.BUFFER_TYPE_COLOR2_BIT, c2s, c2s)\n"
+        "   assert_rt_buffer_size(rt, graphics.BUFFER_TYPE_COLOR3_BIT, c3s, c3s)\n"
         "end\n"
         "function init(self)\n"
         "   assert_rt_size('valid_rt', 8, 16, 32, 64, 96, 128)\n"
@@ -1325,6 +1368,69 @@ TEST_F(dmRenderScriptTest, TestRenderTargetResource)
     dmRender::DeleteRenderScript(m_Context, render_script);
 }
 
+TEST_F(dmRenderScriptTest, TestRenderCameraGetInfo)
+{
+    dmRender::HRenderCamera camera = dmRender::NewRenderCamera(m_Context);
+
+    dmMessage::URL camera_url = {};
+    camera_url.m_Socket   = dmHashString64("main");
+    camera_url.m_Path     = dmHashString64("test_go");
+    camera_url.m_Fragment = dmHashString64("camera");
+
+    dmRender::SetRenderCameraURL(m_Context, camera, &camera_url);
+
+    dmRender::RenderCameraData data = {};
+    data.m_Viewport = dmVMath::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
+    data.m_Fov      = 90.0f;
+    data.m_NearZ    = 0.1f;
+    data.m_FarZ     = 100.0f;
+
+    dmRender::SetRenderCameraData(m_Context, camera, &data);
+
+    dmRender::RenderCamera* camera_ptr = dmRender::GetRenderCameraByUrl(m_Context, camera_url);
+    ASSERT_NE((void*)0, camera_ptr);
+
+    const char* script =
+        "function assert_near(a,b)\n"
+        "    assert(math.abs(a-b) < 0.00001)\n"
+        "end\n"
+        "function init(self)\n"
+        "    local cams = camera.get_cameras()\n"
+        "    assert(#cams == 1)\n"
+        "    assert(cams[1].socket == hash('main'))\n"
+        "    assert(cams[1].path == hash('test_go'))\n"
+        "    assert(cams[1].fragment == hash('camera'))\n"
+        "    assert_near(camera.get_near_z(cams[1]), 0.1)\n"
+        "    assert_near(camera.get_far_z(cams[1]), 100)\n"
+        "    assert_near(camera.get_fov(cams[1]), 90)\n"
+        // Test set_camera()
+        "    render.set_camera(cams[1])\n"
+        "    render.set_camera()\n"
+        "end\n";
+
+    dmRender::HRenderScript render_script                  = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
+    dmRender::HRenderScriptInstance render_script_instance = dmRender::NewRenderScriptInstance(m_Context, render_script);
+    ASSERT_EQ(dmRender::RENDER_SCRIPT_RESULT_OK, dmRender::InitRenderScriptInstance(render_script_instance));
+
+    dmArray<dmRender::Command>& commands = render_script_instance->m_CommandBuffer;
+    ASSERT_EQ(2u, commands.Size());
+
+    // set_camera(camera)
+    ASSERT_EQ(dmRender::COMMAND_TYPE_SET_RENDER_CAMERA, commands[0].m_Type);
+    ASSERT_EQ(camera, (dmRender::HRenderCamera) commands[0].m_Operands[0]);
+
+    // draw
+    ASSERT_EQ(dmRender::COMMAND_TYPE_SET_RENDER_CAMERA, commands[1].m_Type);
+    ASSERT_EQ(0, commands[1].m_Operands[0]);
+
+    dmRender::ParseCommands(m_Context, &commands[0], commands.Size());
+
+    ClearRenderScriptInstanceRenderResources(render_script_instance);
+
+    dmRender::DeleteRenderScriptInstance(render_script_instance);
+    dmRender::DeleteRenderScript(m_Context, render_script);
+}
+
 TEST_F(dmRenderScriptTest, TestRenderResourceTable)
 {
     const char* script =
@@ -1362,9 +1468,11 @@ TEST_F(dmRenderScriptTest, TestRenderResourceTable)
                              "uniform lowp sampler2D texture_sampler_2;\n"
                              "uniform lowp sampler2D texture_sampler_3;\n";
 
-    dmGraphics::ShaderDesc::Shader shader = MakeDDFShader(shader_src, strlen(shader_src));
-    dmGraphics::HVertexProgram vp         = dmGraphics::NewVertexProgram(m_GraphicsContext, &shader);
-    dmGraphics::HFragmentProgram fp       = dmGraphics::NewFragmentProgram(m_GraphicsContext, &shader);
+    dmGraphics::ShaderDesc::Shader shader = MakeDDFShader(shader_src, strlen(shader_src), dmGraphics::ShaderDesc::LANGUAGE_GLSL_SM140);
+    dmGraphics::ShaderDesc vp_desc        = MakeDDFShaderDesc(&shader, dmGraphics::ShaderDesc::SHADER_TYPE_VERTEX);
+    dmGraphics::ShaderDesc fp_desc        = MakeDDFShaderDesc(&shader, dmGraphics::ShaderDesc::SHADER_TYPE_FRAGMENT);
+    dmGraphics::HVertexProgram vp         = dmGraphics::NewVertexProgram(m_GraphicsContext, &vp_desc, 0, 0);
+    dmGraphics::HFragmentProgram fp       = dmGraphics::NewFragmentProgram(m_GraphicsContext, &fp_desc, 0, 0);
     dmRender::HMaterial material          = dmRender::NewMaterial(m_Context, vp, fp);
 
     /////////////////////////////
@@ -1458,8 +1566,74 @@ TEST_F(dmRenderScriptTest, TestRenderResourceTable)
     dmRender::DeleteRenderScript(m_Context, render_script);
 }
 
+TEST_F(dmRenderScriptTest, TestComputeEnableDisable)
+{
+    const char* script =
+    "function init(self)\n"
+    "   render.set_compute('test_compute')\n"
+    "   render.set_compute(hash('test_compute'))\n"
+    "   render.set_compute(nil)\n"
+    "   render.set_compute()\n"
+    "end\n";
+    dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
+    dmRender::HRenderScriptInstance render_script_instance = dmRender::NewRenderScriptInstance(m_Context, render_script);
+
+    dmRender::HComputeProgram compute_program = dmRender::NewComputeProgram(m_Context, m_ComputeProgram);
+
+    ASSERT_EQ(dmRender::RENDER_SCRIPT_RESULT_FAILED, dmRender::InitRenderScriptInstance(render_script_instance));
+    dmRender::AddRenderScriptInstanceRenderResource(render_script_instance, "test_compute", (uint64_t) compute_program, dmRender::RENDER_RESOURCE_TYPE_COMPUTE);
+    ASSERT_EQ(dmRender::RENDER_SCRIPT_RESULT_OK, dmRender::InitRenderScriptInstance(render_script_instance));
+
+    dmRender::DeleteComputeProgram(m_Context, compute_program);
+
+    dmRender::DeleteRenderScriptInstance(render_script_instance);
+    dmRender::DeleteRenderScript(m_Context, render_script);
+}
+
+TEST_F(dmRenderScriptTest, TestDispatch)
+{
+    const char* script =
+    "function init(self)\n"
+    "   render.set_compute('test_compute')\n"
+    "   render.dispatch_compute(1,2,3)\n"
+    "   render.set_compute()\n"
+    "end\n";
+    dmRender::HRenderScript render_script = dmRender::NewRenderScript(m_Context, LuaSourceFromString(script));
+    dmRender::HRenderScriptInstance render_script_instance = dmRender::NewRenderScriptInstance(m_Context, render_script);
+
+    dmRender::HComputeProgram compute_program = dmRender::NewComputeProgram(m_Context, m_ComputeProgram);
+
+    ASSERT_EQ(dmRender::RENDER_SCRIPT_RESULT_FAILED, dmRender::InitRenderScriptInstance(render_script_instance));
+    dmRender::AddRenderScriptInstanceRenderResource(render_script_instance, "test_compute", (uint64_t) compute_program, dmRender::RENDER_RESOURCE_TYPE_COMPUTE);
+    ASSERT_EQ(dmRender::RENDER_SCRIPT_RESULT_OK, dmRender::InitRenderScriptInstance(render_script_instance));
+
+    dmArray<dmRender::Command>& commands = render_script_instance->m_CommandBuffer;
+    dmRender::ParseCommands(m_Context, &commands[0], commands.Size());
+
+    ASSERT_EQ(dmRender::COMMAND_TYPE_SET_COMPUTE, commands[0].m_Type);
+    ASSERT_EQ(compute_program, (dmRender::HComputeProgram) commands[0].m_Operands[0]);
+
+    ASSERT_EQ(dmRender::COMMAND_TYPE_DISPATCH_COMPUTE, commands[1].m_Type);
+    ASSERT_EQ(1, commands[1].m_Operands[0]);
+    ASSERT_EQ(2, commands[1].m_Operands[1]);
+    ASSERT_EQ(3, commands[1].m_Operands[2]);
+
+    ASSERT_EQ(dmRender::COMMAND_TYPE_SET_COMPUTE, commands[2].m_Type);
+    ASSERT_EQ(0, commands[2].m_Operands[0]);
+
+    commands.SetSize(0);
+
+    dmRender::DeleteComputeProgram(m_Context, compute_program);
+
+    dmRender::DeleteRenderScriptInstance(render_script_instance);
+    dmRender::DeleteRenderScript(m_Context, render_script);
+}
+
+extern "C" void dmExportedSymbols();
+
 int main(int argc, char **argv)
 {
+    dmExportedSymbols();
     TestMainPlatformInit();
     dmDDF::RegisterAllTypes();
     jc_test_init(&argc, argv);

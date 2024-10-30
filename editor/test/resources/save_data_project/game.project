@@ -54,6 +54,7 @@ gcm_sender_id = com.defold.save-data-project
 fcm_application_id = com.defold.save-data-project
 manifest = /builtins/manifests/android/AndroidManifest.xml
 proguard = /builtins/manifests/android/dmengine.pro
+extract_native_libs = 1
 
 [project]
 title = Save Data Project
@@ -65,7 +66,10 @@ compress_archive = 1
 custom_resources = /referenced/custom
 bundle_resources = /referenced/bundle
 bundle_exclude_resources = /referenced/bundle/log.txt
-dependencies#0 = https://github.com/defold/extension-spine/archive/main.zip
+dependencies#0 = {{defold.extension.rive.url}}
+dependencies#1 = {{defold.extension.simpledata.url}}
+dependencies#2 = {{defold.extension.spine.url}}
+dependencies#3 = {{defold.extension.texturepacker.url}}
 
 [input]
 game_binding = /checked.input_bindingc
@@ -103,6 +107,7 @@ bundle_identifier = com.defold.save-data-project
 bundle_name = Save Data Project
 bundle_version = 1.0
 infoplist = /builtins/manifests/ios/Info.plist
+privacymanifest = /builtins/manifests/ios/PrivacyInfo.xcprivacy
 default_language = en
 localizations = en
 entitlements = /referenced/entitlements.plist
@@ -114,6 +119,7 @@ bundle_identifier = com.defold.save-data-project
 bundle_name = Save Data Project
 bundle_version = 1.0
 infoplist = /builtins/manifests/osx/Info.plist
+privacymanifest = /builtins/manifests/osx/PrivacyInfo.xcprivacy
 app_icon = /referenced/icon-macos.icns
 
 [windows]
@@ -174,6 +180,7 @@ max_tile_count = 1024
 [engine]
 run_while_iconified = 1
 fixed_update_frequency = 30
+max_time_step = 0.1
 
 [facebook]
 appid = com.defold.save-data-project
@@ -183,9 +190,12 @@ default_texture_min_filter = nearest
 default_texture_mag_filter = nearest
 max_draw_calls = 512
 max_characters = 4096
+max_font_batches = 128
 max_debug_vertices = 8192
 texture_profiles = /checked.texture_profiles
 verify_graphics_calls = 0
+opengl_version_hint = 33
+opengl_core_profile_hint = 1
 
 [iap]
 auto_finish_transactions = 0
@@ -238,6 +248,7 @@ include_dirs = library
 
 [liveupdate]
 settings = /liveupdate.settings
+mount_on_start = 0
 
 [native_extension]
 app_manifest = /checked.appmanifest

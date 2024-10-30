@@ -13,14 +13,18 @@
 ;; specific language governing permissions and limitations under the License.
 
 (ns util.fn
-  (:refer-clojure :exclude [memoize])
+  (:refer-clojure :exclude [memoize partial])
   (:require [internal.java :as java]
             [util.coll :as coll :refer [pair]])
-  (:import [clojure.lang ArityException Compiler]
+  (:import [clojure.lang ArityException Compiler Fn IFn IHashEq MultiFn]
            [java.lang.reflect Method]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
+
+(defonce constantly-false (constantly false))
+(defonce constantly-true (constantly true))
+(defonce constantly-nil (constantly nil))
 
 (definline ^:private with-memoize-info [memoized-fn cache arity]
   `(with-meta ~memoized-fn
@@ -63,17 +67,17 @@
                           cached-result)))]
     (with-memoize-info memoized-fn cache arity)))
 
-(defn- ifn-max-arity-raw
-  ^long [ifn]
+(defn- ifn-class-max-arity-raw
+  ^long [^Class ifn-class]
   (reduce (fn [^long max-arity ^Method method]
             (case (.getName method)
               "invoke" (max max-arity (.getParameterCount method))
               "getRequiredArity" (reduced -1) ; The function is variadic.
               max-arity))
           0
-          (java/get-declared-methods (class ifn))))
+          (java/get-declared-methods ifn-class)))
 
-(def ifn-max-arity (memoize-one ifn-max-arity-raw))
+(def ^:private ifn-class-max-arity (memoize-one ifn-class-max-arity-raw))
 
 (defn max-arity
   "Returns the maximum number of arguments the supplied function can accept, or
@@ -82,7 +86,7 @@
   (let [ifn (if (var? ifn-or-var)
               (var-get ifn-or-var)
               ifn-or-var)
-        ^long max-arity (ifn-max-arity ifn)]
+        ^long max-arity (ifn-class-max-arity (class ifn))]
     (if (and (pos? max-arity)
              (var? ifn-or-var)
              (-> ifn-or-var meta :macro))
@@ -101,6 +105,16 @@
         1 (memoize-one ifn)
         2 (memoize-two ifn)
         (memoize-any ifn arity)))))
+
+(defn clear-memoized!
+  "Clear all previously cached results from the cache of a memoized function
+  created by the functions in this module. Returns nil."
+  [memoized-fn]
+  (if-let [memoize-cache (::memoize-cache (meta memoized-fn))]
+    (do
+      (swap! memoize-cache coll/empty-with-meta)
+      nil)
+    (throw (IllegalArgumentException. "The function was not memoized by us."))))
 
 (defn evict-memoized!
   "Evict a previously cached result from the cache of a memoized function
@@ -124,7 +138,9 @@
         nil)
       (throw (IllegalArgumentException. "The function was not memoized by us.")))))
 
-(defn declared-symbol [declared-fn]
+(defn declared-symbol
+  "Given a declared function, returns the symbol that resolves to the function."
+  [declared-fn]
   (if-not (fn? declared-fn)
     (throw (IllegalArgumentException. "The argument must be a declared function."))
     (let [class-name (.getName (class declared-fn))]
@@ -140,3 +156,93 @@
                      namespaced-name
                      (.intern (subs namespaced-name (inc separator-index))))]
           (symbol namespace name))))))
+
+(defn make-case-fn
+  "Given a collection of key-value pairs, return a function that returns the
+  value for a key, or throws an IllegalArgumentException if the key does not
+  match any entry. The behavior of the returned function should be functionally
+  equivalent to a case expression."
+  [key-value-pairs]
+  ;; TODO: Reimplement as macro producing a case expression?
+  (let [lookup (if (map? key-value-pairs)
+                 key-value-pairs
+                 (into {} key-value-pairs))]
+    (fn key->value [key]
+      (let [value (lookup key ::not-found)]
+        (if (identical? ::not-found value)
+          (throw (IllegalArgumentException.
+                   (str "No matching clause: " key)
+                   (ex-info "Key not found in lookup."
+                            {:key key
+                             :valid-keys (keys lookup)})))
+          value)))))
+
+(deftype PartialFn [pfn fn args]
+  Fn
+  IFn
+  (invoke [_]
+    (pfn))
+  (invoke [_ a]
+    (pfn a))
+  (invoke [_ a b]
+    (pfn a b))
+  (invoke [_ a b c]
+    (pfn a b c))
+  (invoke [_ a b c d]
+    (pfn a b c d))
+  (invoke [_ a b c d e]
+    (pfn a b c d e))
+  (invoke [_ a b c d e f]
+    (pfn a b c d e f))
+  (invoke [_ a b c d e f g]
+    (pfn a b c d e f g))
+  (invoke [_ a b c d e f g h]
+    (pfn a b c d e f g h))
+  (invoke [_ a b c d e f g h i]
+    (pfn a b c d e f g h i))
+  (invoke [_ a b c d e f g h i j]
+    (pfn a b c d e f g h i j))
+  (invoke [_ a b c d e f g h i j k]
+    (pfn a b c d e f g h i j k))
+  (invoke [_ a b c d e f g h i j k l]
+    (pfn a b c d e f g h i j k l))
+  (invoke [_ a b c d e f g h i j k l m]
+    (pfn a b c d e f g h i j k l m))
+  (invoke [_ a b c d e f g h i j k l m n]
+    (pfn a b c d e f g h i j k l m n))
+  (invoke [_ a b c d e f g h i j k l m n o]
+    (pfn a b c d e f g h i j k l m n o))
+  (invoke [_ a b c d e f g h i j k l m n o p]
+    (pfn a b c d e f g h i j k l m n o p))
+  (invoke [_ a b c d e f g h i j k l m n o p q]
+    (pfn a b c d e f g h i j k l m n o p q))
+  (invoke [_ a b c d e f g h i j k l m n o p q r]
+    (pfn a b c d e f g h i j k l m n o p q r))
+  (invoke [_ a b c d e f g h i j k l m n o p q r s]
+    (pfn a b c d e f g h i j k l m n o p q r s))
+  (invoke [_ a b c d e f g h i j k l m n o p q r s t]
+    (pfn a b c d e f g h i j k l m n o p q r s t))
+  (invoke [_ a b c d e f g h i j k l m n o p q r s t rest]
+    (apply pfn a b c d e f g h i j k l m n o p q r s t rest))
+  (applyTo [_ arglist]
+    (apply pfn arglist))
+  IHashEq
+  (hasheq [_]
+    (hash [fn args]))
+  Object
+  (equals [_ obj]
+    (if (instance? PartialFn obj)
+      (let [^PartialFn that obj]
+        (and (= fn (.-fn that))
+             (= args (.-args that))))
+      false)))
+
+(defn partial
+  "Like clojure.core/partial, but with equality semantics"
+  [f & args]
+  (PartialFn. (apply clojure.core/partial f args) f args))
+
+(defn multi-responds?
+  "Check if a multimethod has a matching method for the supplied arguments"
+  [^MultiFn multi & args]
+  (some? (.getMethod multi (apply (.-dispatchFn multi) args))))

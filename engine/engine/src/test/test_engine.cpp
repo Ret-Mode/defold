@@ -27,6 +27,8 @@
 #define JC_TEST_IMPLEMENTATION
 #include <jc_test/jc_test.h>
 
+extern "C" void dmExportedSymbols();
+
 #define CONTENT_ROOT "src/test/build/default"
 #define MAKE_PATH(_VAR, _NAME)  dmTestUtil::MakeHostPathf(_VAR, sizeof(_VAR), "%s%s", CONTENT_ROOT, _NAME)
 
@@ -171,6 +173,7 @@ TEST_F(EngineTest, CrossScriptMessaging)
 {
     uint32_t frame_count = 0;
     char project_path[256];
+    // see cross_script_messaging.ini and look for cross_script_messaging.ini in wscript
     const char* argv[] = {"test_engine", "--config=bootstrap.main_collection=/cross_script_messaging/main.collectionc", "--config=bootstrap.render=/cross_script_messaging/default.renderc", "--config=dmengine.unload_builtins=0", MAKE_PATH(project_path, "/game.projectc")};
     ASSERT_EQ(0, Launch(DM_ARRAY_SIZE(argv), (char**)argv, 0, PostRunFrameCount, &frame_count));
     ASSERT_EQ(frame_count, 1u);
@@ -180,6 +183,7 @@ TEST_F(EngineTest, RenderScript)
 {
     uint32_t frame_count = 0;
     char project_path[256];
+    // see render_script.ini and look for render_script.ini in wscript
     const char* argv[] = {"test_engine", "--config=bootstrap.main_collection=/render_script/main.collectionc", "--config=bootstrap.render=/render_script/default.renderc", "--config=dmengine.unload_builtins=0", MAKE_PATH(project_path, "/game.projectc")};
     ASSERT_EQ(0, Launch(DM_ARRAY_SIZE(argv), (char**)argv, 0, PostRunFrameCount, &frame_count));
     ASSERT_EQ(frame_count, 1u);
@@ -189,6 +193,7 @@ TEST_F(EngineTest, CameraAqcuireFocus)
 {
     uint32_t frame_count = 0;
     char project_path[256];
+    // see camera_acquire_input_focus.ini and look for camera_acquire_input_focus.ini in wscript
     const char* argv[] = {"test_engine", "--config=bootstrap.main_collection=/camera/camera_acquire_input_focus.collectionc", "--config=bootstrap.render=/camera/camera_acquire_input_focus.renderc", "--config=dmengine.unload_builtins=0", MAKE_PATH(project_path, "/game.projectc")};
     ASSERT_EQ(0, Launch(DM_ARRAY_SIZE(argv), (char**)argv, 0, PostRunFrameCount, &frame_count));
     ASSERT_EQ(frame_count, 1u);
@@ -423,6 +428,12 @@ TEST_F(EngineTest, ModelComponent)
     ASSERT_EQ(0, Launch(DM_ARRAY_SIZE(argv), (char**)argv, 0, 0, 0));
 }
 
+
+
+// Adding new test make sure it's linked in main.collection in a collection proxy
+// if you need custom render etc see for cross_script_messaging.ini in this file
+
+
 // TEST_F(EngineTest, FixedUpdateFrequency2D)
 // {
 //     dmEngine::Stats stats;
@@ -459,6 +470,7 @@ TEST_F(EngineTest, FixedUpdateFrequency3D)
 
 int main(int argc, char **argv)
 {
+    dmExportedSymbols();
     TestMainPlatformInit();
 
     dmProfile::Initialize(0);

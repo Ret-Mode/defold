@@ -17,7 +17,7 @@
 
 #include <stdint.h>
 
-#include <dlib/configfile.h>
+#include <dmsdk/dlib/configfile.h>
 #include <dlib/hashtable.h>
 #include <dlib/message.h>
 
@@ -42,6 +42,7 @@
 #include "engine_service.h"
 #include "engine.h"
 #include <engine/engine_ddf.h>
+#include <dmsdk/gamesys/resources/res_font.h>
 
 namespace dmEngine
 {
@@ -143,7 +144,7 @@ namespace dmEngine
         dmGameSystem::SoundContext                  m_SoundContext;
         dmGameObject::ModuleContext                 m_ModuleContext;
 
-        dmRender::HFontMap                          m_SystemFontMap;
+        dmGameSystem::FontResource*                 m_SystemFont;
         dmHID::HContext                             m_HidContext;
         dmInput::HContext                           m_InputContext;
         dmInput::HBinding                           m_GameInputBinding;
@@ -157,6 +158,7 @@ namespace dmEngine
         bool                                        m_QuitOnEsc;
         bool                                        m_ConnectionAppMode;        //!< If the app was started on a device, listening for connections
         bool                                        m_RunWhileIconified;
+        bool                                        m_UseSwVSync;
         uint64_t                                    m_PreviousFrameTime;        // Used to calculate dt
         float                                       m_AccumFrameTime;           // Used to trigger frame updates when using m_UpdateFrequency != 0
         uint32_t                                    m_UpdateFrequency;
@@ -166,6 +168,7 @@ namespace dmEngine
         uint32_t                                    m_ClearColor;
         float                                       m_InvPhysicalWidth;
         float                                       m_InvPhysicalHeight;
+        float                                       m_MaxTimeStep;
 
         RecordData                                  m_RecordData;
     };
@@ -177,7 +180,7 @@ namespace dmEngine
     void Step(HEngine engine);
 
     void ReloadResources(HEngine engine, const char* extension);
-    bool LoadBootstrapContent(HEngine engine, dmConfigFile::HConfig config);
+    bool LoadBootstrapContent(HEngine engine, HConfigFile config);
     void UnloadBootstrapContent(HEngine engine);
 
 

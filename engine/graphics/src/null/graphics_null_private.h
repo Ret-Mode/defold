@@ -20,6 +20,7 @@
 
 #include "../graphics_private.h"
 
+
 namespace dmGraphics
 {
     const static uint32_t MAX_REGISTER_COUNT = 16;
@@ -49,6 +50,7 @@ namespace dmGraphics
         int32_t*          m_LastBoundUnit; // testing
         volatile uint16_t m_DataState; // data state per mip-map (mipX = bitX). 0=ok, 1=pending
         uint8_t           m_MipMapCount;
+        uint8_t           m_UsageHintFlags;
     };
 
     struct VertexStreamBuffer
@@ -104,21 +106,23 @@ namespace dmGraphics
         NullContext(const ContextParams& params);
 
         dmJobThread::HContext              m_JobThread;
+        dmMutex::HMutex                    m_AssetContainerMutex;
+
         dmPlatform::HWindow                m_Window;
         SetTextureAsyncState               m_SetTextureAsyncState;
         dmOpaqueHandleContainer<uintptr_t> m_AssetHandleContainer;
-        VertexStreamBuffer                 m_VertexStreams[MAX_VERTEX_STREAM_COUNT];
+        VertexStreamBuffer                 m_VertexStreams[MAX_VERTEX_BUFFERS][MAX_VERTEX_STREAM_COUNT];
+        HVertexDeclaration                 m_VertexDeclarations[MAX_VERTEX_BUFFERS];
         dmVMath::Vector4                   m_ProgramRegisters[MAX_REGISTER_COUNT];
         TextureSampler                     m_Samplers[MAX_TEXTURE_COUNT];
         HTexture                           m_Textures[MAX_TEXTURE_COUNT];
-        HVertexBuffer                      m_VertexBuffer;
+        HVertexBuffer                      m_VertexBuffers[MAX_VERTEX_BUFFERS];
         FrameBuffer                        m_MainFrameBuffer;
         FrameBuffer*                       m_CurrentFrameBuffer;
         void*                              m_Program;
         PipelineState                      m_PipelineState;
         TextureFilter                      m_DefaultTextureMinFilter;
         TextureFilter                      m_DefaultTextureMagFilter;
-        ShaderDesc::Language               m_ShaderClassLanguage[2];
 
         uint32_t                           m_Width;
         uint32_t                           m_Height;
@@ -130,7 +134,7 @@ namespace dmGraphics
         uint32_t                           m_UseAsyncTextureLoad    : 1;
         uint32_t                           m_RequestWindowClose     : 1;
         uint32_t                           m_PrintDeviceInfo        : 1;
-        uint32_t                           m_ContextFeatures        : 3;
+        uint32_t                           m_ContextFeatures        : 8;
     };
 }
 

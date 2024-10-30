@@ -51,6 +51,10 @@ public class TextureSetLayout {
             this.x = x;
             this.y = y;
         };
+        public Pointi(Point p) {
+            this.x = (int)p.x;
+            this.y = (int)p.y;
+        };
     }
 
     public static class Sizei
@@ -77,6 +81,13 @@ public class TextureSetLayout {
             this.height = height;
         };
 
+        public Rectanglei(Rectangle rect) {
+            this.x = (int)rect.x;
+            this.y = (int)rect.y;
+            this.width = (int)rect.width;
+            this.height = (int)rect.height;
+        };
+
         public Point getCenter() {
             return new Point(x + width * 0.5f, y + height * 0.5f);
         }
@@ -87,6 +98,11 @@ public class TextureSetLayout {
             width += border * 2;
             height += border * 2;
         }
+
+        public int getX() { return x; }
+        public int getY() { return y; }
+        public int getWidth() { return width; }
+        public int getHeight() { return height; }
     }
 
     // TODO: Rename this class?
@@ -94,8 +110,12 @@ public class TextureSetLayout {
         private String id;
         private int index; // for easier keeping the original order
         private int page;
-        private Rectanglei rect; // The final placement in the texture. May lay outside of the texture image.
-        private boolean rotated; // True if rotated 90 deg (CCW)
+        private Pointi pivot;
+        // Full rect.
+        // The final placement in the texture.
+        // May lay outside of the texture image.
+        private Rectanglei rect;
+        private boolean rotated; // True if rotated 90 deg (CW)
 
         // Texel coordinates within the original image.
         // Origin is top left corner of original image.
@@ -110,6 +130,7 @@ public class TextureSetLayout {
             this.index = index;
             this.page = page;
             this.rotated = rotated;
+            this.pivot = new Pointi(width/2, height/2);
             this.rect = new Rectanglei(x, y, width, height);
             this.vertices = new ArrayList<>();
             this.indices = new ArrayList<>();
@@ -183,6 +204,12 @@ public class TextureSetLayout {
         public Point getCenter() {
             return rect.getCenter();
         }
+        public Pointi getPivot() {
+            return pivot;
+        }
+        public void setPivot(Pointi pivot) {
+            this.pivot = pivot;
+        }
         public List<Pointi> getVertices() {
             return vertices;
         }
@@ -202,7 +229,7 @@ public class TextureSetLayout {
 
         @Override
         public String toString() {
-            return String.format("Rect: x/y: %d, %d  w/h: %d, %d  r: %d  id: %s", rect.x, rect.y, rect.width, rect.height, rotated?1:0, id);
+            return String.format("Rect: x/y: %d, %d  w/h: %d, %d  p: %d, %d  r: %d  id: %s", rect.x, rect.y, rect.width, rect.height, pivot.x, pivot.y, rotated?1:0, id);
         }
     }
 
@@ -363,10 +390,10 @@ public class TextureSetLayout {
             int area = 0;
             for (Rect rect : rectangles) {
                 area += rect.getArea();
-                maxLengthScale = Math.max(maxLengthScale, rect.rect.width + margin);
-                maxLengthScale = Math.max(maxLengthScale, rect.rect.height + margin);
+                maxLengthScale = Math.max(maxLengthScale, rect.rect.width);
+                maxLengthScale = Math.max(maxLengthScale, rect.rect.height);
             }
-
+            maxLengthScale += margin * 2;
             // Ensure the longest length found in all of the images will fit within one page, irrespective of orientation.
             final int defaultMaxPageSize = 1 << getExponentNextOrMatchingPowerOfTwo(Math.max((int)Math.sqrt(area), maxLengthScale));
             MaxRectsLayoutStrategy.Settings settings = new MaxRectsLayoutStrategy.Settings();
@@ -457,9 +484,13 @@ public class TextureSetLayout {
     public static class SourceImage
     {
         public String       name;           // Name of this image (no path, no suffix)
-        public Rectangle    originalSize;   // size of the original image
+        public Point        pivot;          // Image coord of pivot point
+                                            // * May lay outside of image
+                                            // * Not rotated
         public Rectangle    rect;           // The final placement of the rectangle.
-                                            // May overlap other images, may be extending beyond the texture.
+                                            // * May overlap other images
+                                            // * May be extending beyond the texture.
+                                            // * May be rotated
         public boolean      rotated;        // True if it has been rotated 90 deg ccw
 
         // Texel coordinates within the original image.
@@ -477,12 +508,11 @@ public class TextureSetLayout {
         public void setName(String name) {
             this.name = name;
         }
-
-        public Rectangle getOriginalSize() {
-            return originalSize;
+        public Point getPivot() {
+            return pivot;
         }
-        public void setOriginalSize(Rectangle originalSize) {
-            this.originalSize = originalSize;
+        public void setPivot(Point pivot) {
+            this.pivot = pivot;
         }
         public Rectangle getRect() {
             return rect;
@@ -490,7 +520,6 @@ public class TextureSetLayout {
         public void setRect(Rectangle rect) {
             this.rect = rect;
         }
-
         public boolean getRotated() {
             return rotated;
         }
@@ -509,6 +538,29 @@ public class TextureSetLayout {
         }
         public void setIndices(List<Integer> indices) {
             this.indices = indices;
+        }
+
+        public void debugPrint() {
+            System.out.printf("SourceImage {\n");
+            System.out.printf("    name: %s\n", name);
+            System.out.printf("    rotated: %s\n", rotated?"true":"false");
+            //System.out.printf("    originalSize: %f, %f\n", originalSize.width, originalSize.height);
+            System.out.printf("    pivot: %f, %f\n", pivot.x, pivot.y);
+            System.out.printf("    rect: %f, %f, %f, %f\n", rect.x, rect.y, rect.width, rect.height);
+            System.out.printf("    vertices:  {\n");
+            for (Point p : vertices)
+            {
+                System.out.printf("        %f, %f\n", p.x, p.y);
+            }
+            System.out.printf("    }\n");
+            System.out.printf("    indices:  {\n");
+            for (int i : indices)
+            {
+                System.out.printf("        %d", i);
+            }
+            System.out.printf("\n");
+            System.out.printf("    }\n");
+            System.out.printf("}\n");
         }
     }
 
@@ -529,10 +581,19 @@ public class TextureSetLayout {
             Layout layout = new Layout((int)page.size.width, (int)page.size.height, new ArrayList<>());
 
             for (SourceImage image : page.images) {
-                // image.rect is the actual rect within the texture, but we want the "orignal" size/placement
-                Rect rect = new Rect(image.name, imageCount++, (int)image.rect.x, (int)image.rect.y, (int)image.rect.width, (int)image.rect.height);
+                // image.rect is the actual rect within the texture, but we want the "original" size/placement
+                int width = (int)image.rect.width;
+                int height = (int)image.rect.height;
+                Rect rect = new Rect(image.name, imageCount++, (int)image.rect.x, (int)image.rect.y, width, height);
                 rect.setPage(page.index);
                 rect.setRotated(image.rotated);
+
+                Pointi p;
+                if (image.pivot != null)
+                    p = new Pointi(image.pivot);
+                else
+                    p = new Pointi(width/2, height/2);
+                rect.setPivot(p);
 
                 for (Point vertex : image.vertices) {
                     rect.addVertex(new Pointi((int)vertex.x, (int)vertex.y));

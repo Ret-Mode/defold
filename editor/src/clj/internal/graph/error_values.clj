@@ -14,7 +14,8 @@
 
 (ns internal.graph.error-values
   (:require [clojure.string :as string]
-            [internal.graph.types :as gt]))
+            [internal.graph.types :as gt]
+            [util.coll :as coll]))
 
 (set! *warn-on-reflection* true)
 
@@ -83,15 +84,13 @@
 (defn- error-messages [e]
   (distinct (keep :message (error-seq e))))
 
-(defn error-message [e]
+(defn error-message
+  ^String [e]
   (string/join "\n" (error-messages e)))
 
 (defn error-aggregate
   ([es]
-   (let [max-severity (reduce (fn [result severity] (if (> (severity-levels result) (severity-levels severity))
-                                                      result
-                                                      severity))
-                              :info (keep :severity es))]
+   (let [max-severity (transduce (keep :severity) (completing #(max-key severity-levels %1 %2)) :info es)]
      (map->ErrorValue {:severity max-severity :causes (vec es)})))
   ([es & kvs]
    (apply assoc (error-aggregate es) kvs)))
@@ -135,13 +134,16 @@
                               {:value value}))))
           values))
 
+(def ^:private flatten-errors-xf
+  (comp
+    coll/flatten-xf
+    (map unpack-if-package)
+    (filter error-value?)))
+
 (defn flatten-errors [& errors]
-  (some->> errors
-           flatten
-           (map unpack-if-package)
-           (filter error-value?)
-           not-empty
-           error-aggregate))
+  (let [errors (into [] flatten-errors-xf errors)]
+    (when-not (coll/empty? errors)
+      (error-aggregate errors))))
 
 (defmacro precluding-errors [errors result]
   `(let [error-value# (flatten-errors ~errors)]

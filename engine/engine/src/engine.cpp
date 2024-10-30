@@ -167,11 +167,11 @@ namespace dmEngine
     {
         Engine* engine = (Engine*)user_data;
         dmExtension::Params params;
-        params.m_ConfigFile = engine->m_Config;
+        params.m_ConfigFile      = engine->m_Config;
         params.m_ResourceFactory = engine->m_Factory;
-        params.m_L          = 0;
+        params.m_L               = 0;
         dmExtension::Event event;
-        event.m_Event = focus ? dmExtension::EVENT_ID_ACTIVATEAPP : dmExtension::EVENT_ID_DEACTIVATEAPP;
+        event.m_Event = focus ? EXTENSION_EVENT_ID_ACTIVATEAPP : EXTENSION_EVENT_ID_DEACTIVATEAPP;
         dmExtension::DispatchEvent( &params, &event );
 
         dmGameSystem::OnWindowFocus(focus != 0);
@@ -190,7 +190,7 @@ namespace dmEngine
         params.m_ResourceFactory = engine->m_Factory;
         params.m_L          = 0;
         dmExtension::Event event;
-        event.m_Event = iconify ? dmExtension::EVENT_ID_ICONIFYAPP : dmExtension::EVENT_ID_DEICONIFYAPP;
+        event.m_Event = iconify ? EXTENSION_EVENT_ID_ICONIFYAPP : EXTENSION_EVENT_ID_DEICONIFYAPP;
         dmExtension::DispatchEvent( &params, &event );
 
         dmGameSystem::OnWindowIconify(iconify != 0);
@@ -234,7 +234,7 @@ namespace dmEngine
     , m_GuiScriptContext(0x0)
     , m_Factory(0x0)
     , m_SystemSocket(0x0)
-    , m_SystemFontMap(0x0)
+    , m_SystemFont(0x0)
     , m_HidContext(0x0)
     , m_InputContext(0x0)
     , m_GameInputBinding(0x0)
@@ -244,7 +244,8 @@ namespace dmEngine
     , m_WasIconified(true)
     , m_QuitOnEsc(false)
     , m_ConnectionAppMode(false)
-    , m_RunWhileIconified(0)
+    , m_RunWhileIconified(false)
+    , m_UseSwVSync(false)
     , m_Width(960)
     , m_Height(640)
     , m_InvPhysicalWidth(1.0f/960)
@@ -274,6 +275,20 @@ namespace dmEngine
 
     void Delete(HEngine engine)
     {
+        {
+            dmExtension::Params params;
+            params.m_ConfigFile = engine->m_Config;
+            params.m_ResourceFactory = engine->m_Factory;
+            if (engine->m_SharedScriptContext) {
+                params.m_L = dmScript::GetLuaState(engine->m_SharedScriptContext);
+            } else {
+                params.m_L = dmScript::GetLuaState(engine->m_GOScriptContext);
+            }
+            dmExtension::Event event;
+            event.m_Event = EXTENSION_EVENT_ID_ENGINE_DELETE;
+            dmExtension::DispatchEvent( &params, &event );
+        }
+
         if (engine->m_MainCollection)
             dmResource::Release(engine->m_Factory, engine->m_MainCollection);
         dmGameObject::PostUpdate(engine->m_Register);
@@ -283,7 +298,7 @@ namespace dmEngine
         dmHttpClient::ShutdownConnectionPool();
 
         // Reregister the types before the rest of the contexts are deleted
-        if (engine->m_Factory) {
+        if (engine->m_Factory && engine->m_ResourceTypeContexts.Size() > 0) {
             dmResource::DeregisterTypes(engine->m_Factory, &engine->m_ResourceTypeContexts);
         }
 
@@ -348,6 +363,13 @@ namespace dmEngine
         {
             dmResource::DeleteFactory(engine->m_Factory);
         }
+
+// TODO: Temporarily disabled as it hangs the shutdown procedure
+        // // Stop processing graphics requests before deleting the graphics context
+        // if (engine->m_JobThreadContext)
+        // {
+        //     dmJobThread::Destroy(engine->m_JobThreadContext);
+        // }
 
         if (engine->m_GraphicsContext)
         {
@@ -513,6 +535,11 @@ namespace dmEngine
     {
         swap_interval = dmMath::Max(0, swap_interval);
         dmGraphics::SetSwapInterval(engine->m_GraphicsContext, swap_interval);
+
+        if (!dmGraphics::IsContextFeatureSupported(engine->m_GraphicsContext, dmGraphics::CONTEXT_FEATURE_VSYNC))
+        {
+            engine->m_UseSwVSync = swap_interval != 0;
+        }
     }
 
     static void SetUpdateFrequency(HEngine engine, uint32_t frequency)
@@ -566,6 +593,7 @@ namespace dmEngine
             case dmGraphics::ADAPTER_FAMILY_OPENGL: return dmPlatform::PLATFORM_GRAPHICS_API_OPENGL;
             case dmGraphics::ADAPTER_FAMILY_VULKAN: return dmPlatform::PLATFORM_GRAPHICS_API_VULKAN;
             case dmGraphics::ADAPTER_FAMILY_VENDOR: return dmPlatform::PLATFORM_GRAPHICS_API_VENDOR;
+            case dmGraphics::ADAPTER_FAMILY_WEBGPU: return dmPlatform::PLATFORM_GRAPHICS_API_WEBGPU;
             default:break;
         }
         assert(0);
@@ -780,18 +808,26 @@ namespace dmEngine
             return false;
         }
 
+        int instance_index = 0;
+#if !defined(DM_RELEASE)
+        instance_index = dmConfigFile::GetInt(engine->m_Config, "project.instance_index", 0);
+#endif
         int write_log = dmConfigFile::GetInt(engine->m_Config, "project.write_log", 0);
         if (write_log) {
             uint32_t count = 0;
             char* log_paths[3];
 
-            const char* LOG_FILE_NAME = "log.txt";
+            char log_file_name[32] = "log.txt";
+            if (instance_index > 0)
+            {
+                dmSnPrintf(log_file_name, sizeof(log_file_name), "instance_%d_log.txt", instance_index);
+            }
 
             const char* log_dir = dmConfigFile::GetString(engine->m_Config, "project.log_dir", NULL);
             char log_config_path[DMPATH_MAX_PATH];
             if (log_dir != NULL)
             {
-                dmPath::Concat(log_dir, LOG_FILE_NAME, log_config_path, sizeof(log_config_path));
+                dmPath::Concat(log_dir, log_file_name, log_config_path, sizeof(log_config_path));
                 log_paths[count] = log_config_path;
                 count++;
             }
@@ -800,7 +836,7 @@ namespace dmEngine
             char main_log_path[DMPATH_MAX_PATH];
             if (dmSys::GetLogPath(sys_path, sizeof(sys_path)) == dmSys::RESULT_OK)
             {
-                dmPath::Concat(sys_path, LOG_FILE_NAME, main_log_path, sizeof(main_log_path));
+                dmPath::Concat(sys_path, log_file_name, main_log_path, sizeof(main_log_path));
                 log_paths[count] = main_log_path;
                 count++;
             }
@@ -810,7 +846,7 @@ namespace dmEngine
             const char* logs_dir = dmConfigFile::GetString(engine->m_Config, "project.title_as_file_name", "defoldlogs");
             if (dmSys::GetApplicationSupportPath(logs_dir, application_support_path, sizeof(application_support_path)) == dmSys::RESULT_OK)
             {
-                dmPath::Concat(application_support_path, LOG_FILE_NAME, application_support_log_path, sizeof(application_support_log_path));
+                dmPath::Concat(application_support_path, log_file_name, application_support_log_path, sizeof(application_support_log_path));
                 log_paths[count] = application_support_log_path;
                 count++;
             }
@@ -827,6 +863,15 @@ namespace dmEngine
 
         // This scope is mainly here to make sure the "Main" scope is created first
         DM_PROFILE("Init");
+
+        char window_title[512];
+        const char* project_title = dmConfigFile::GetString(engine->m_Config, "project.title", "TestTitle");
+#if !defined(DM_RELEASE)
+        if (instance_index)
+        {
+            dmSnPrintf(window_title, sizeof(window_title), "%s - %d", project_title, instance_index);
+        }
+#endif
 
         float clear_color_red = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_red", 0.0);
         float clear_color_green = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_green", 0.0);
@@ -854,11 +899,17 @@ namespace dmEngine
         window_params.m_Width                   = engine->m_Width;
         window_params.m_Height                  = engine->m_Height;
         window_params.m_Samples                 = dmConfigFile::GetInt(engine->m_Config, "display.samples", 0);
-        window_params.m_Title                   = dmConfigFile::GetString(engine->m_Config, "project.title", "TestTitle");
+        window_params.m_Title                   = instance_index ? window_title : project_title;
         window_params.m_Fullscreen              = (bool) dmConfigFile::GetInt(engine->m_Config, "display.fullscreen", 0);
         window_params.m_HighDPI                 = (bool) dmConfigFile::GetInt(engine->m_Config, "display.high_dpi", 0);
         window_params.m_BackgroundColor         = clear_color;
         window_params.m_GraphicsApi             = AdapterFamilyToGraphicsAPI(dmGraphics::GetInstalledAdapterFamily());
+
+        if (window_params.m_GraphicsApi == dmPlatform::PLATFORM_GRAPHICS_API_OPENGL)
+        {
+            window_params.m_OpenGLVersionHint        = (uint8_t) dmConfigFile::GetInt(engine->m_Config, "graphics.opengl_version_hint", 33);
+            window_params.m_OpenGLUseCoreProfileHint = (bool) dmConfigFile::GetInt(engine->m_Config, "graphics.opengl_core_profile_hint", 1);
+        }
 
         engine->m_Window = dmPlatform::NewWindow();
 
@@ -867,6 +918,13 @@ namespace dmEngine
         {
             dmLogFatal("Could not open window (%d).", platform_result);
             return false;
+        }
+
+        bool setting_vsync     = dmConfigFile::GetInt(engine->m_Config, "display.vsync", true); // Deprecated
+        uint32_t swap_interval = dmConfigFile::GetInt(engine->m_Config, "display.swap_interval", 1);
+        if (!setting_vsync)
+        {
+            swap_interval = 0;
         }
 
         dmJobThread::JobThreadCreationParams job_thread_create_param;
@@ -886,6 +944,7 @@ namespace dmEngine
         graphics_context_params.m_Height                  = engine->m_Height;
         graphics_context_params.m_PrintDeviceInfo         = dmConfigFile::GetInt(engine->m_Config, "display.display_device_info", 0);
         graphics_context_params.m_JobThread               = engine->m_JobThreadContext;
+        graphics_context_params.m_SwapInterval            = swap_interval;
 
         engine->m_GraphicsContext = dmGraphics::NewContext(graphics_context_params);
         if (engine->m_GraphicsContext == 0x0)
@@ -893,6 +952,8 @@ namespace dmEngine
             dmLogFatal("Unable to create the graphics context.");
             return false;
         }
+
+        SetSwapInterval(engine, swap_interval);
 
         uint32_t physical_dpi = dmGraphics::GetDisplayDpi(engine->m_GraphicsContext);
         uint32_t physical_width = dmGraphics::GetWindowWidth(engine->m_GraphicsContext);
@@ -905,21 +966,11 @@ namespace dmEngine
 #endif
 
         engine->m_FixedUpdateFrequency = dmConfigFile::GetInt(engine->m_Config, "engine.fixed_update_frequency", 60);
+        engine->m_MaxTimeStep = dmConfigFile::GetFloat(engine->m_Config, "engine.max_time_step", 0.5);
 
         dmGameSystem::OnWindowCreated(physical_width, physical_height);
 
-        engine->m_UpdateFrequency = dmConfigFile::GetInt(engine->m_Config, "display.update_frequency", 0);
-
-        SetUpdateFrequency(engine, engine->m_UpdateFrequency);
-
-        bool setting_vsync = dmConfigFile::GetInt(engine->m_Config, "display.vsync", true); // Deprecated
-
-        uint32_t opengl_swap_interval = dmConfigFile::GetInt(engine->m_Config, "display.swap_interval", 1);
-        if (!setting_vsync)
-        {
-            opengl_swap_interval = 0;
-        }
-        SetSwapInterval(engine, opengl_swap_interval);
+        SetUpdateFrequency(engine, dmConfigFile::GetInt(engine->m_Config, "display.update_frequency", 0));
 
         const uint32_t max_resources = dmConfigFile::GetInt(engine->m_Config, dmResource::MAX_RESOURCES_KEY, 1024);
         dmResource::NewFactoryParams params;
@@ -936,9 +987,10 @@ namespace dmEngine
         }
 
         int32_t liveupdate_enable = dmConfigFile::GetInt(engine->m_Config, "liveupdate.enabled", 1);
-        if (liveupdate_enable)
+        int32_t liveupdate_mount_on_start = dmConfigFile::GetInt(engine->m_Config, "liveupdate.mount_on_start", 1);
+        if (liveupdate_enable && liveupdate_mount_on_start)
         {
-            params.m_Flags |= RESOURCE_FACTORY_FLAGS_LIVE_UPDATE;
+            params.m_Flags |= RESOURCE_FACTORY_FLAGS_LIVE_UPDATE_MOUNTS_ON_START;
         }
 
 #if !defined(DM_RELEASE)
@@ -962,21 +1014,29 @@ namespace dmEngine
 
         dmArray<dmScript::HContext>& module_script_contexts = engine->m_ModuleContext.m_ScriptContexts;
 
+        dmScript::ContextParams script_params = {};
+        script_params.m_Factory         = engine->m_Factory;
+        script_params.m_ConfigFile      = engine->m_Config;
+        script_params.m_GraphicsContext = engine->m_GraphicsContext;
+
         bool shared = dmConfigFile::GetInt(engine->m_Config, "script.shared_state", 0);
-        if (shared) {
-            engine->m_SharedScriptContext = dmScript::NewContext(engine->m_Config, engine->m_Factory, true);
+        if (shared)
+        {
+            engine->m_SharedScriptContext = dmScript::NewContext(script_params);
             dmScript::Initialize(engine->m_SharedScriptContext);
             engine->m_GOScriptContext = engine->m_SharedScriptContext;
             engine->m_RenderScriptContext = engine->m_SharedScriptContext;
             engine->m_GuiScriptContext = engine->m_SharedScriptContext;
             module_script_contexts.SetCapacity(1);
             module_script_contexts.Push(engine->m_SharedScriptContext);
-        } else {
-            engine->m_GOScriptContext = dmScript::NewContext(engine->m_Config, engine->m_Factory, true);
+        }
+        else
+        {
+            engine->m_GOScriptContext = dmScript::NewContext(script_params);
             dmScript::Initialize(engine->m_GOScriptContext);
-            engine->m_RenderScriptContext = dmScript::NewContext(engine->m_Config, engine->m_Factory, true);
+            engine->m_RenderScriptContext = dmScript::NewContext(script_params);
             dmScript::Initialize(engine->m_RenderScriptContext);
-            engine->m_GuiScriptContext = dmScript::NewContext(engine->m_Config, engine->m_Factory, true);
+            engine->m_GuiScriptContext = dmScript::NewContext(script_params);
             dmScript::Initialize(engine->m_GuiScriptContext);
             module_script_contexts.SetCapacity(3);
             module_script_contexts.Push(engine->m_GOScriptContext);
@@ -998,10 +1058,11 @@ namespace dmEngine
             dmLogWarning("Failed to initialize sound system.");
         }
 
-        dmGameObject::Result go_result = dmGameObject::SetCollectionDefaultCapacity(engine->m_Register, dmConfigFile::GetInt(engine->m_Config, dmGameObject::COLLECTION_MAX_INSTANCES_KEY, dmGameObject::DEFAULT_MAX_COLLECTION_CAPACITY));
+        int max_instance_count = dmConfigFile::GetInt(engine->m_Config, dmGameObject::COLLECTION_MAX_INSTANCES_KEY, dmGameObject::DEFAULT_MAX_COLLECTION_CAPACITY);
+        dmGameObject::Result go_result = dmGameObject::SetCollectionDefaultCapacity(engine->m_Register, max_instance_count);
         if(go_result != dmGameObject::RESULT_OK)
         {
-            dmLogFatal("Failed to set max instance count for collections (%d)", go_result);
+            dmLogFatal("Failed to set '%s' %d for collections (%d)", dmGameObject::COLLECTION_MAX_INSTANCES_KEY, max_instance_count, go_result);
             return false;
         }
         dmGameObject::SetInputStackDefaultCapacity(engine->m_Register, dmConfigFile::GetInt(engine->m_Config, dmGameObject::COLLECTION_MAX_INPUT_STACK_ENTRIES_KEY, dmGameObject::DEFAULT_MAX_INPUT_STACK_CAPACITY));
@@ -1022,6 +1083,7 @@ namespace dmEngine
 #else
         render_params.m_MaxDebugVertexCount = 0;
 #endif
+        render_params.m_MaxBatches = (uint32_t) dmConfigFile::GetInt(engine->m_Config, "graphics.max_font_batches", 128);
         engine->m_RenderContext = dmRender::NewRenderContext(engine->m_GraphicsContext, render_params);
 
         dmGameObject::Initialize(engine->m_Register, engine->m_GOScriptContext);
@@ -1071,7 +1133,7 @@ namespace dmEngine
         gui_params.m_GetURLCallback = dmGameSystem::GuiGetURLCallback;
         gui_params.m_GetUserDataCallback = dmGameSystem::GuiGetUserDataCallback;
         gui_params.m_ResolvePathCallback = dmGameSystem::GuiResolvePathCallback;
-        gui_params.m_GetTextMetricsCallback = dmGameSystem::GuiGetTextMetricsCallback;
+        gui_params.m_GetTextMetricsCallback = (void (*)(const void *, const char *, float, bool, float, float, dmGui::TextMetrics *))dmGameSystem::GuiGetTextMetricsCallback;
 
         // If an extension changes window size at extensions initialization phase, engine should read that.
         physical_width = dmGraphics::GetWindowWidth(engine->m_GraphicsContext);
@@ -1279,6 +1341,8 @@ namespace dmEngine
 
         dmGui::SetDisplayProfiles(engine->m_GuiContext, engine->m_DisplayProfiles);
 
+        dmPlatform::ShowWindow(engine->m_Window);
+
         // clear it a couple of times, due to initialization of extensions might stall the updates
         for (int i = 0; i < 3; ++i) {
             dmGraphics::BeginFrame(engine->m_GraphicsContext);
@@ -1305,6 +1369,7 @@ namespace dmEngine
         script_lib_context.m_HidContext      = engine->m_HidContext;
         script_lib_context.m_GraphicsContext = engine->m_GraphicsContext;
         script_lib_context.m_JobThread       = engine->m_JobThreadContext;
+        script_lib_context.m_ConfigFile      = engine->m_Config;
 
         if (engine->m_SharedScriptContext) {
             script_lib_context.m_ScriptContext = engine->m_SharedScriptContext;
@@ -1355,7 +1420,7 @@ namespace dmEngine
             uint16_t prio = 0;
             while (s)
             {
-                dmResource::ResourceType type;
+                HResourceType type;
                 fact_result = dmResource::GetTypeFromExtension(engine->m_Factory, s, &type);
                 if (fact_result == dmResource::RESULT_OK)
                 {
@@ -1393,6 +1458,20 @@ namespace dmEngine
         if (engine->m_EngineService)
         {
             dmEngineService::InitProfiler(engine->m_EngineService, engine->m_Factory, engine->m_Register);
+        }
+
+        {
+            dmExtension::Params params;
+            params.m_ConfigFile = engine->m_Config;
+            params.m_ResourceFactory = engine->m_Factory;
+            if (engine->m_SharedScriptContext) {
+                params.m_L = dmScript::GetLuaState(engine->m_SharedScriptContext);
+            } else {
+                params.m_L = dmScript::GetLuaState(engine->m_GOScriptContext);
+            }
+            dmExtension::Event event;
+            event.m_Event = EXTENSION_EVENT_ID_ENGINE_INITIALIZED;
+            dmExtension::DispatchEvent( &params, &event );
         }
 
         engine->m_PreviousFrameTime = dmTime::GetTime();
@@ -1500,6 +1579,8 @@ bail:
 
     static void StepFrame(HEngine engine, float dt)
     {
+        uint64_t frame_start = dmTime::GetTime();
+
         dmProfiler::SetUpdateFrequency((uint32_t)(1.0f / dt));
 
         if (dmGraphics::GetWindowStateParam(engine->m_GraphicsContext, dmPlatform::WINDOW_STATE_ICONIFIED))
@@ -1715,7 +1796,7 @@ bail:
             }
 
 #if !defined(DM_RELEASE)
-            dmProfiler::RenderProfiler(profile, engine->m_GraphicsContext, engine->m_RenderContext, engine->m_SystemFontMap);
+            dmProfiler::RenderProfiler(profile, engine->m_GraphicsContext, engine->m_RenderContext, ResFontGetHandle(engine->m_SystemFont));
 #endif
             // Call post render functions for extensions, if available.
             // We do it here at the end of the frame (before swap buffers/flip)
@@ -1732,6 +1813,27 @@ bail:
                     ext_params.m_L = dmScript::GetLuaState(engine->m_GOScriptContext);
                 }
                 dmExtension::PostRender(&ext_params);
+            }
+
+            if (engine->m_UseSwVSync && engine->m_UpdateFrequency > 0)
+            {
+                DM_PROFILE("SoftwareVsync");
+                uint64_t current = dmTime::GetTime();
+
+                float target_time = dt; // already pre calculated by CalcTimeStep
+                uint64_t elapsed = current - frame_start;
+                uint64_t remainder = uint64_t(target_time*1000000) - elapsed;
+
+                while (remainder > 500) // dont bother with less than 0.5ms
+                {
+                    uint64_t t1 = dmTime::GetTime();
+                    dmTime::Sleep(100); // sleep in chunks of 0.1ms
+                    uint64_t t2 = dmTime::GetTime();
+                    uint64_t slept = t2 - t1;
+                    if (slept >= remainder)
+                        break;
+                    remainder -= slept;
+                }
             }
 
             dmGraphics::Flip(engine->m_GraphicsContext);
@@ -1771,8 +1873,8 @@ bail:
         float frame_dt = (float)(frame_time / 1000000.0);
 
         // Never allow for large hitches
-        if (frame_dt > 0.5f) {
-            frame_dt = 0.5f;
+        if (frame_dt > engine->m_MaxTimeStep) {
+            frame_dt = engine->m_MaxTimeStep;
         }
 
         // Variable frame rate
@@ -2004,13 +2106,13 @@ bail:
         dmResource::Result fact_error;
 #if !defined(DM_RELEASE)
         const char* system_font_map = "/builtins/fonts/debug/always_on_top.fontc";
-        fact_error = dmResource::Get(engine->m_Factory, system_font_map, (void**) &engine->m_SystemFontMap);
+        fact_error = dmResource::Get(engine->m_Factory, system_font_map, (void**) &engine->m_SystemFont);
         if (fact_error != dmResource::RESULT_OK)
         {
             dmLogFatal("Could not load system font map '%s'.", system_font_map);
             return false;
         }
-        dmRender::SetSystemFontMap(engine->m_RenderContext, engine->m_SystemFontMap);
+        dmRender::SetSystemFontMap(engine->m_RenderContext, ResFontGetHandle(engine->m_SystemFont));
 #endif
         // The system font is currently the only resource we need from the connection app
         // After this point, the rest of the resources should be loaded the ordinary way
@@ -2056,8 +2158,8 @@ bail:
     {
         if (engine->m_RenderScriptPrototype)
             dmResource::Release(engine->m_Factory, engine->m_RenderScriptPrototype);
-        if (engine->m_SystemFontMap)
-            dmResource::Release(engine->m_Factory, engine->m_SystemFontMap);
+        if (engine->m_SystemFont)
+            dmResource::Release(engine->m_Factory, engine->m_SystemFont);
         if (engine->m_GameInputBinding)
             dmResource::Release(engine->m_Factory, engine->m_GameInputBinding);
         if (engine->m_DisplayProfiles)

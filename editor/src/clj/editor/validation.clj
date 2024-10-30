@@ -46,6 +46,14 @@
   (when (> (id-counts id) 1)
     (format "'%s' is in use by another instance" id)))
 
+(defn prop-contains-prohibited-characters? [id name]
+  (cond
+    (re-find #"[#:]" id)
+    (format "%s should not contain special URL symbols such as '#' or ':'" name)
+
+    (or (= (first id) \space) (= (last id) \space))
+    (format "%s should not start or end with a space symbol" name)))
+
 (defn prop-negative? [v name]
   (when (< v 0)
     (format "'%s' cannot be negative" name)))
@@ -74,6 +82,13 @@
       (when-not (= (resource/type-ext v) ext)
         (format "%s '%s' is not of type %s" name (resource/resource->proj-path v) (format-ext ext)))))
 
+(defn prop-resource-not-component? [v name]
+  (let [resource-type (some-> v resource/resource-type)
+        tags (:tags resource-type)]
+    (when-not (or (contains? tags :component)
+                  (contains? tags :embeddable))
+      (format "Only components allowed for '%s'. '%s' is not a component." name (:ext resource-type)))))
+
 (defn prop-member-of? [v val-set message]
   (when (and val-set (not (val-set v)))
     message))
@@ -92,6 +107,24 @@
                "'%s' must be between %f and %f")]
     (when (not (<= min v max))
       (util/format* tmpl name min max))))
+
+(defn prop-minimum-check? [min v name]
+  (when (< v min)
+    (let [tmpl (if (integer? min)
+                 "'%s' must be at least %d"
+                 "'%s' must be at least %f")]
+      (util/format* tmpl name min))))
+
+(defn prop-maximum-check? [max v name]
+  (when (> v max)
+    (let [tmpl (if (integer? max)
+                 "'%s' must be at most %d"
+                 "'%s' must be at most %f")]
+      (util/format* tmpl name max))))
+
+(defn prop-collision-shape-conflict? [shapes collision-shape]
+  (when (and collision-shape (not (empty? shapes)))
+    "Cannot combine embedded shapes with a referenced 'Collision Shape'. Please remove either."))
 
 (def prop-0-1? (partial prop-outside-range? [0.0 1.0]))
 

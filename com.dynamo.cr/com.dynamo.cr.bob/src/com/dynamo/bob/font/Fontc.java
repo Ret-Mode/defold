@@ -32,6 +32,7 @@ import java.awt.font.GlyphVector;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.FlatteningPathIterator;
 import java.awt.geom.PathIterator;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.ConvolveOp;
@@ -52,6 +53,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.TreeSet;
+import java.util.Set;
 
 import javax.imageio.ImageIO;
 
@@ -74,6 +77,7 @@ import com.dynamo.render.proto.Font.FontTextureFormat;
 import com.dynamo.render.proto.Font.FontRenderMode;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.TextFormat;
+import org.apache.commons.lang3.StringUtils;
 
 class OrderComparator implements Comparator<Fontc.Glyph> {
     @Override
@@ -117,6 +121,16 @@ class BlendComposite implements Composite {
 }
 
 public class Fontc {
+
+    public static final char[] ASCII_7BIT;
+    static {
+        int start = 32;
+        int end = 126;
+        ASCII_7BIT = new char[end - start + 1];
+        for (int i = start; i <= end; i++) {
+            ASCII_7BIT[i - start] = (char) i;
+        }
+    }
 
     public enum InputFontFormat {
         FORMAT_TRUETYPE,
@@ -164,7 +178,7 @@ public class Fontc {
             + desc.getAntialias()
             + desc.getOutlineWidth()
             + desc.getShadowBlur()
-            + desc.getExtraCharacters()
+            + desc.getCharacters()
             + desc.getOutputFormat()
             + desc.getAllChars()
             + desc.getCacheWidth()
@@ -231,17 +245,26 @@ public class Fontc {
 
         if (!fontDesc.getAllChars()) {
 
-            // 7-bit ASCII. Note inclusive range [32,126]
-            for (int i = 32; i <= 126; ++i) {
-                characters.add(i);
+            String chars = fontDesc.getCharacters();
+            if (!StringUtils.isEmpty(chars)) {
+                for (int i = 0; i < chars.length(); i++) {
+                    char c = chars.charAt(i);
+                    characters.add((int) c);
+                }
             }
-
-            String extraCharacters = fontDesc.getExtraCharacters();
-            for (int i = 0; i < extraCharacters.length(); i++) {
-                char c = extraCharacters.charAt(i);
-                characters.add((int)c);
+            else {
+                for (char c : ASCII_7BIT) {
+                    characters.add((int) c);
+                }
+                String extraCharacters = fontDesc.getExtraCharacters();
+                for (int i = 0; i < extraCharacters.length(); i++) {
+                    char c = extraCharacters.charAt(i);
+                    characters.add((int) c);
+                }
             }
         }
+        Set<Integer> deDup = new TreeSet<Integer>(characters);
+        characters = new ArrayList<Integer>(deDup);
 
         if (fontDesc.getOutlineWidth() > 0.0f) {
             outlineStroke = new BasicStroke(fontDesc.getOutlineWidth() * 2.0f);
@@ -293,17 +316,21 @@ public class Fontc {
             }
         }
 
-        BufferedImage image = new BufferedImage(1024, 1024, BufferedImage.TYPE_3BYTE_BGR);
+        BufferedImage image = new BufferedImage(256, 256, BufferedImage.TYPE_3BYTE_BGR);
         Graphics2D g        = image.createGraphics();
         g.setBackground(Color.BLACK);
         g.clearRect(0, 0, image.getWidth(), image.getHeight());
         setHighQuality(g);
 
         FontMetrics fontMetrics = g.getFontMetrics(font);
-        int maxAscent           = fontMetrics.getMaxAscent();
-        int maxDescent          = fontMetrics.getMaxDescent();
-        glyphBankBuilder.setMaxAscent(maxAscent)
-                      .setMaxDescent(maxDescent);
+
+        Rectangle2D rect = fontMetrics.getMaxCharBounds(g);
+
+        glyphBankBuilder.setMaxAscent(fontMetrics.getMaxAscent())
+                        .setMaxDescent(fontMetrics.getMaxDescent())
+                        .setMaxAdvance(fontMetrics.getMaxAdvance())
+                        .setMaxWidth((float)rect.getWidth())
+                        .setMaxHeight((float)rect.getHeight());
     }
 
 
@@ -545,6 +572,11 @@ public class Fontc {
             cell_max_descent = Math.max(cell_max_descent, descent);
         }
 
+        // Make sure it fits future glyphs (provided at runtime)
+        cell_max_ascent  = (int)Math.ceil(Math.max(cell_max_ascent, glyphBankBuilder.getMaxAscent()));
+        cell_max_descent = (int)Math.ceil(Math.max(cell_max_descent, glyphBankBuilder.getMaxDescent()));
+        cell_width = (int)Math.ceil(Math.max(cell_width, glyphBankBuilder.getMaxWidth()));
+
         cell_height       = cell_max_ascent + cell_max_descent + padding * 2 + cell_padding * 2;
         cell_max_ascent  += padding;
 
@@ -725,7 +757,8 @@ public class Fontc {
                 throw new FontFormatException("Could not generate font preview: " + e.getMessage());
             }
         }
-
+        boolean is_monospaced = true;
+        float base_advance = include_glyph_count > 0 ? glyphs.get(0).advance : 0;
         for (int i = 0; i < include_glyph_count; i++) {
             Glyph glyph = glyphs.get(i);
             GlyphBank.Glyph.Builder glyphBuilder = GlyphBank.Glyph.newBuilder()
@@ -745,8 +778,13 @@ public class Fontc {
             }
 
             glyphBankBuilder.addGlyphs(glyphBuilder);
+            if (base_advance != glyph.advance)
+            {
+                is_monospaced = false;
+            }
         }
-
+        glyphBankBuilder.setIsMonospaced(is_monospaced);
+        glyphBankBuilder.setPadding(padding);
         return previewImage;
 
     }
@@ -1091,12 +1129,20 @@ public class Fontc {
             FontMap.Builder fontMapBuilder = FontMap.newBuilder();
             fontMapBuilder.setMaterial(BuilderUtil.replaceExt(fontDesc.getMaterial(), ".material", ".materialc"));
             fontMapBuilder.setGlyphBank(glyphBankProjectStr);
+
+            fontMapBuilder.setSize(fontDesc.getSize());
+            fontMapBuilder.setAntialias(fontDesc.getAntialias());
             fontMapBuilder.setShadowX(fontDesc.getShadowX());
             fontMapBuilder.setShadowY(fontDesc.getShadowY());
+            fontMapBuilder.setShadowBlur(fontDesc.getShadowBlur());
+            fontMapBuilder.setShadowAlpha(fontDesc.getShadowAlpha());
             fontMapBuilder.setAlpha(fontDesc.getAlpha());
             fontMapBuilder.setOutlineAlpha(fontDesc.getOutlineAlpha());
-            fontMapBuilder.setShadowAlpha(fontDesc.getShadowAlpha());
+            fontMapBuilder.setOutlineWidth(fontDesc.getOutlineWidth());
             fontMapBuilder.setLayerMask(GetFontMapLayerMask(fontDesc));
+
+            fontMapBuilder.setOutputFormat(fontDesc.getOutputFormat());
+            fontMapBuilder.setRenderMode(fontDesc.getRenderMode());
 
             fontMapBuilder.build().writeTo(fontMapOutputStream);
 

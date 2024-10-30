@@ -34,6 +34,18 @@ namespace dmGraphics
     #define UNIFORM_LOCATION_GET_FS(loc)        ((loc & (UNIFORM_LOCATION_MAX << 32)) >> 32)
     #define UNIFORM_LOCATION_GET_FS_MEMBER(loc) ((loc & (UNIFORM_LOCATION_MAX << 48)) >> 48)
 
+    const static uint8_t MAX_BINDINGS_PER_SET_COUNT = 32;
+    const static uint8_t MAX_SET_COUNT              = 4;
+    const static uint8_t MAX_STORAGE_BUFFERS        = 4;
+    const static uint8_t MAX_VERTEX_BUFFERS         = 3;
+
+    enum ShaderStageFlag
+    {
+        SHADER_STAGE_FLAG_VERTEX   = 0x1,
+        SHADER_STAGE_FLAG_FRAGMENT = 0x2,
+        SHADER_STAGE_FLAG_COMPUTE  = 0x4,
+    };
+
     struct VertexStream
     {
         dmhash_t m_NameHash;
@@ -45,29 +57,9 @@ namespace dmGraphics
 
     struct VertexStreamDeclaration
     {
-        VertexStream m_Streams[MAX_VERTEX_STREAM_COUNT];
-        uint8_t      m_StreamCount;
-    };
-
-    struct VertexDeclaration
-    {
-        struct Stream
-        {
-            dmhash_t m_NameHash;
-            int16_t  m_Location;
-            uint16_t m_Size;
-            uint16_t m_Offset;
-            Type     m_Type;
-            bool     m_Normalize;
-        };
-
-        Stream             m_Streams[MAX_VERTEX_STREAM_COUNT];
-        dmhash_t           m_PipelineHash; // Vulkan
-        uint16_t           m_StreamCount;
-        uint16_t           m_Stride;
+        VertexStream       m_Streams[MAX_VERTEX_STREAM_COUNT];
         VertexStepFunction m_StepFunction;
-        HProgram           m_BoundForProgram;     // OpenGL
-        uint32_t           m_ModificationVersion; // OpenGL
+        uint8_t            m_StreamCount;
     };
 
     struct ShaderResourceType
@@ -106,13 +98,19 @@ namespace dmGraphics
             BINDING_FAMILY_TEXTURE        = 3,
         };
 
+        union BindingInfo
+        {
+            uint16_t m_BlockSize;
+            uint16_t m_SamplerTextureIndex;
+        };
+
         char*                       m_Name;
         dmhash_t                    m_NameHash;
         ShaderResourceType          m_Type;
         BindingFamily               m_BindingFamily;
         uint16_t                    m_Set;
         uint16_t                    m_Binding;
-        uint16_t                    m_BlockSize;
+        BindingInfo                 m_BindingInfo;
     };
 
     struct ShaderMeta
@@ -126,8 +124,10 @@ namespace dmGraphics
 
     struct SetTextureAsyncParams
     {
-        HTexture      m_Texture;
-        TextureParams m_Params;
+        HTexture                m_Texture;
+        TextureParams           m_Params;
+        SetTextureAsyncCallback m_Callback;
+        void*                   m_UserData;
     };
 
     struct SetTextureAsyncState
@@ -138,6 +138,36 @@ namespace dmGraphics
         dmArray<HTexture>              m_PostDeleteTextures;
     };
 
+    struct ProgramResourceBindingsInfo
+    {
+        uint32_t m_UniformBufferCount;
+        uint32_t m_StorageBufferCount;
+        uint32_t m_TextureCount;
+        uint32_t m_SamplerCount;
+        uint32_t m_TotalUniformCount;
+        uint32_t m_UniformDataSize;
+        uint32_t m_UniformDataSizeAligned;
+        uint32_t m_MaxSet;
+        uint32_t m_MaxBinding;
+    };
+
+    struct ProgramResourceBinding
+    {
+        ShaderResourceBinding*           m_Res;
+        dmArray<ShaderResourceTypeInfo>* m_TypeInfos;
+        uint32_t                         m_DataOffset;
+
+        union
+        {
+            uint16_t m_DynamicOffsetIndex;
+            uint16_t m_TextureUnit;
+            uint16_t m_StorageBufferUnit;
+        };
+
+        uint8_t m_StageFlags;
+    };
+
+    HContext             GetInstalledContext();
     uint32_t             GetTextureFormatBitsPerPixel(TextureFormat format); // Gets the bits per pixel from uncompressed formats
     uint32_t             GetGraphicsTypeDataSize(Type type);
     void                 InstallAdapterVendor();
@@ -154,15 +184,16 @@ namespace dmGraphics
     ShaderDesc::Language GetShaderProgramLanguage(HContext context);
     uint32_t             GetShaderTypeSize(ShaderDesc::ShaderDataType type);
     Type                 ShaderDataTypeToGraphicsType(ShaderDesc::ShaderDataType shader_type);
+    ShaderDesc::Shader*  GetShaderProgram(HContext context, ShaderDesc* shader_desc);
 
-    void                 CreateShaderMeta(ShaderDesc::Shader* ddf, ShaderMeta* meta);
+    void                 CreateShaderMeta(ShaderDesc::ShaderReflection* ddf, ShaderMeta* meta);
     void                 DestroyShaderMeta(ShaderMeta& meta);
     bool                 GetUniformIndices(const dmArray<ShaderResourceBinding>& uniforms, dmhash_t name_hash, uint64_t* index_out, uint64_t* index_member_out);
 
     void                  InitializeSetTextureAsyncState(SetTextureAsyncState& state);
     void                  ResetSetTextureAsyncState(SetTextureAsyncState& state);
     SetTextureAsyncParams GetSetTextureAsyncParams(SetTextureAsyncState& state, uint16_t index);
-    uint16_t              PushSetTextureAsyncState(SetTextureAsyncState& state, HTexture texture, TextureParams params);
+    uint16_t              PushSetTextureAsyncState(SetTextureAsyncState& state, HTexture texture, TextureParams params, SetTextureAsyncCallback callback, void* user_data);
     void                  ReturnSetTextureAsyncIndex(SetTextureAsyncState& state, uint16_t index);
     void                  PushSetTextureAsyncDeleteTexture(SetTextureAsyncState& state, HTexture texture);
 
@@ -197,7 +228,7 @@ namespace dmGraphics
     uint64_t GetDrawCount();
     void     GetTextureFilters(HContext context, uint32_t unit, TextureFilter& min_filter, TextureFilter& mag_filter);
     void     EnableVertexDeclaration(HContext _context, HVertexDeclaration vertex_declaration, uint32_t binding_index);
-    void     SetOverrideShaderLanguage(HContext context, ShaderDesc::ShaderClass shader_class, ShaderDesc::Language language);
+    void     SetOverrideShaderLanguage(HContext context, ShaderDesc::ShaderType shader_class, ShaderDesc::Language language);
 }
 
 #endif // #ifndef DM_GRAPHICS_PRIVATE_H

@@ -377,12 +377,16 @@ This must be submitted to the driver for compilation before you can use it. See
             (delete-program gl program)))))))
 
 (defn shader-compile-errors
-  [^GL2 gl shader-name]
-  (let [msg-len (IntBuffer/allocate 1)]
-    (.glGetShaderiv gl shader-name GL2/GL_INFO_LOG_LENGTH msg-len)
-    (let [msg (ByteBuffer/allocate (.get msg-len 0))]
-      (.glGetShaderInfoLog gl shader-name (.capacity msg) nil msg)
-      (bbuf->string msg))))
+  ^String [^GL2 gl shader-name]
+  (let [log-length-storage (IntBuffer/allocate 1)]
+    (.glGetShaderiv gl shader-name GL2/GL_INFO_LOG_LENGTH log-length-storage)
+    (let [null-terminated-string-length (.get log-length-storage 0) ; Note: Some implementations return zero when the log is empty, some return one.
+          string-length (dec null-terminated-string-length)]
+      (if (pos? string-length)
+        (let [info-log-buffer (ByteBuffer/allocate null-terminated-string-length)]
+          (.glGetShaderInfoLog gl shader-name null-terminated-string-length nil info-log-buffer)
+          (bbuf->string info-log-buffer 0 string-length))
+        ""))))
 
 (defn delete-shader
   [^GL2 gl shader]
@@ -504,6 +508,9 @@ of GLSL strings and returns an object that satisfies GlBind and GlEnable."
   ([request-id verts frags uniforms array-sampler-name->uniform-names]
    (->ShaderLifecycle request-id verts frags uniforms array-sampler-name->uniform-names)))
 
+(defn shader-lifecycle? [value]
+  (instance? ShaderLifecycle value))
+
 (defn is-using-array-samplers? [shader-lifecycle]
   (pos? (count (:array-sampler-name->uniform-names shader-lifecycle))))
 
@@ -570,7 +577,12 @@ of GLSL strings and returns an object that satisfies GlBind and GlEnable."
             location (.glGetUniformLocation gl program name)
             type (gl-uniform-type->uniform-type (aget out-type 0))
             count (aget out-count 0)
-            sanitized-name (string/replace name name-array-suffix-pattern "")]
+            ;; 1. strip brackets from uniform name, i.e "uniform_name[123]"
+            sanitized-name (string/replace name name-array-suffix-pattern "")
+            ;; 2. take the last part of the uniform name, in case it's
+            ;;    a uniform buffer so we can match it to constants.
+            ;;    I.e, "uniform_buffer.my_uniform" -> "my_uniform"
+            sanitized-name (last (string/split sanitized-name #"\."))]
         {:name sanitized-name
          :index location
          :type type

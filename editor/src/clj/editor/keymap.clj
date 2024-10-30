@@ -13,8 +13,9 @@
 ;; specific language governing permissions and limitations under the License.
 
 (ns editor.keymap
-  (:require [editor.ui :as ui]
-            [editor.util :as util])
+  (:require [editor.os :as os]
+            [editor.ui :as ui]
+            [util.fn :as fn])
   (:import [javafx.scene Scene]
            [javafx.scene.input KeyCharacterCombination KeyCodeCombination KeyCombination KeyCombination$ModifierValue KeyEvent]))
 
@@ -97,6 +98,7 @@
            ["Meta+'/'" :toggle-comment]
            ["Meta+T" :scene-stop]
            ["Meta+U" :rebundle]
+           ["Meta+J" :close-engine]
            ["Meta+Up" :beginning-of-file]
            ["Meta+V" :paste]
            ["Meta+W" :close]
@@ -135,7 +137,7 @@
            ["Shift+Meta+I" :toggle-visibility-filters]
            ["Shift+Meta+L" :split-selection-into-lines]
            ["Shift+Meta+Left" :select-beginning-of-line-text]
-           ["Shift+Meta+R" :open-asset]
+           ["Shift+Meta+R" :reload-extensions]
            ["Shift+Meta+Right" :select-end-of-line]
            ["Shift+Meta+T" :reopen-recent-file]
            ["Shift+Meta+Up" :select-beginning-of-file]
@@ -153,7 +155,10 @@
            ["Space" :show-palette]
            ["Tab" :tab]
            ["Up" :up]
-           ["W" :move-tool]]
+           ["W" :move-tool]
+           ["X" :flip-brush-horizontally]
+           ["Y" :flip-brush-vertically]
+           ["Z" :rotate-brush-90-degrees]]
    :win32 [["A" :add]
            ["Alt+Down" :move-down]
            ["Alt+F9" :edit-breakpoint]
@@ -192,6 +197,7 @@
            ["Ctrl+Space" :proposals]
            ["Ctrl+T" :scene-stop]
            ["Ctrl+U" :rebundle]
+           ["Ctrl+J" :close-engine]
            ["Ctrl+V" :paste]
            ["Ctrl+W" :close]
            ["Ctrl+X" :cut]
@@ -234,7 +240,7 @@
            ["Shift+Ctrl+I" :toggle-visibility-filters]
            ["Shift+Ctrl+L" :split-selection-into-lines]
            ["Shift+Ctrl+Left" :select-prev-word]
-           ["Shift+Ctrl+R" :open-asset]
+           ["Shift+Ctrl+R" :reload-extensions]
            ["Shift+Ctrl+Right" :select-next-word]
            ["Shift+Ctrl+T" :reopen-recent-file]
            ["Shift+Ctrl+W" :close-all]
@@ -261,7 +267,10 @@
            ["Space" :show-palette]
            ["Tab" :tab]
            ["Up" :up]
-           ["W" :move-tool]]
+           ["W" :move-tool]
+           ["X" :flip-brush-horizontally]
+           ["Y" :flip-brush-vertically]
+           ["Z" :rotate-brush-90-degrees]]
    :linux [["A" :add]
            ["Alt+Down" :move-down]
            ["Alt+F9" :edit-breakpoint]
@@ -300,6 +309,7 @@
            ["Ctrl+Space" :proposals]
            ["Ctrl+T" :scene-stop]
            ["Ctrl+U" :rebundle]
+           ["Ctrl+J" :close-engine]
            ["Ctrl+V" :paste]
            ["Ctrl+W" :close]
            ["Ctrl+X" :cut]
@@ -342,7 +352,7 @@
            ["Shift+Ctrl+I" :toggle-visibility-filters]
            ["Shift+Ctrl+L" :split-selection-into-lines]
            ["Shift+Ctrl+Left" :select-prev-word]
-           ["Shift+Ctrl+R" :open-asset]
+           ["Shift+Ctrl+R" :reload-extensions]
            ["Shift+Ctrl+Right" :select-next-word]
            ["Shift+Ctrl+T" :reopen-recent-file]
            ["Shift+Ctrl+W" :close-all]
@@ -369,10 +379,13 @@
            ["Space" :show-palette]
            ["Tab" :tab]
            ["Up" :up]
-           ["W" :move-tool]]})
+           ["W" :move-tool]
+           ["X" :flip-brush-horizontally]
+           ["Y" :flip-brush-vertically]
+           ["Z" :rotate-brush-90-degrees]]})
 
 (def default-host-key-bindings
-  (platform->default-key-bindings (util/os)))
+  (platform->default-key-bindings (os/os)))
 
 (def ^:private default-allowed-duplicate-shortcuts
   #{"Alt+Down"
@@ -395,6 +408,9 @@
     "F"         ; :frame-selection
     "R"         ; :scale-tool
     "W"         ; :move-tool
+    "X"         ; :flip-brush-horizontally
+    "Y"         ; :flip-brush-vertically
+    "Z"         ; :rotate-brush-90-degrees
     "Shift+A"   ; :add-secondary
     "Shift+E"}) ; :erase-tool
 
@@ -502,7 +518,7 @@
 
 (defn typable?
   ([key-combo-data]
-   (typable? key-combo-data (util/os)))
+   (typable? key-combo-data (os/os)))
   ([{:keys [alt-down? control-down? meta-down?]} os]
    (let [mac? (= os :macos)]
      (-> typable-truth-table
@@ -578,11 +594,11 @@
                          throw-on-error?
                          allowed-duplicate-shortcuts
                          allowed-typable-shortcuts]
-                  :or   {valid-command?              (constantly true)
-                         platform                    (util/os)
-                         throw-on-error?             false
+                  :or   {valid-command? fn/constantly-true
+                         platform (os/os)
+                         throw-on-error? false
                          allowed-duplicate-shortcuts default-allowed-duplicate-shortcuts
-                         allowed-typable-shortcuts   default-allowed-typable-shortcuts}}]
+                         allowed-typable-shortcuts default-allowed-typable-shortcuts}}]
    (let [{:keys [errors keymap]} (make-keymap* key-bindings platform valid-command? allowed-duplicate-shortcuts allowed-typable-shortcuts)]
      (if (and (seq errors) throw-on-error?)
        (throw (ex-info "Keymap has errors"

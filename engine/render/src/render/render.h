@@ -32,23 +32,31 @@ namespace dmRender
 
     static const uint32_t MAX_MATERIAL_TAG_COUNT = 32; // Max tag count per material
 
-    static const dmhash_t VERTEX_STREAM_POSITION   = dmHashString64("position");
-    static const dmhash_t VERTEX_STREAM_NORMAL     = dmHashString64("normal");
-    static const dmhash_t VERTEX_STREAM_TANGENT    = dmHashString64("tangent");
-    static const dmhash_t VERTEX_STREAM_COLOR      = dmHashString64("color");
-    static const dmhash_t VERTEX_STREAM_TEXCOORD0  = dmHashString64("texcoord0");
-    static const dmhash_t VERTEX_STREAM_TEXCOORD1  = dmHashString64("texcoord1");
-    static const dmhash_t VERTEX_STREAM_PAGE_INDEX = dmHashString64("page_index");
+    static const dmhash_t VERTEX_STREAM_POSITION      = dmHashString64("position");
+    static const dmhash_t VERTEX_STREAM_NORMAL        = dmHashString64("normal");
+    static const dmhash_t VERTEX_STREAM_TANGENT       = dmHashString64("tangent");
+    static const dmhash_t VERTEX_STREAM_COLOR         = dmHashString64("color");
+    static const dmhash_t VERTEX_STREAM_TEXCOORD0     = dmHashString64("texcoord0");
+    static const dmhash_t VERTEX_STREAM_TEXCOORD1     = dmHashString64("texcoord1");
+    static const dmhash_t VERTEX_STREAM_PAGE_INDEX    = dmHashString64("page_index");
+    static const dmhash_t VERTEX_STREAM_WORLD_MATRIX  = dmHashString64("mtx_world");
+    static const dmhash_t VERTEX_STREAM_NORMAL_MATRIX = dmHashString64("mtx_normal");
 
     typedef struct RenderTargetSetup*       HRenderTargetSetup;
     typedef uint64_t                        HRenderType;
-    typedef uint64_t                        HSampler;
+    typedef struct Sampler*                 HSampler;
     typedef struct RenderScript*            HRenderScript;
     typedef struct RenderScriptInstance*    HRenderScriptInstance;
     typedef struct Predicate*               HPredicate;
     typedef struct ComputeProgram*          HComputeProgram;
     typedef uintptr_t                       HRenderBuffer;
     typedef struct BufferedRenderBuffer*    HBufferedRenderBuffer;
+    typedef HOpaqueHandle                   HRenderCamera;
+
+    static const uint8_t RENDERLIST_INVALID_DISPATCH       = 0xff;
+    static const HRenderType INVALID_RENDER_TYPE_HANDLE    = ~0ULL;
+    static const uint32_t INVALID_SAMPLER_UNIT             = 0xffffffff;
+    static const uint8_t  INVALID_MATERIAL_ATTRIBUTE_INDEX = 0xff;
 
     /**
      * Display profiles handle
@@ -67,6 +75,7 @@ namespace dmRender
         RENDER_RESOURCE_TYPE_INVALID       = 0,
         RENDER_RESOURCE_TYPE_MATERIAL      = 1,
         RENDER_RESOURCE_TYPE_RENDER_TARGET = 2,
+        RENDER_RESOURCE_TYPE_COMPUTE       = 3,
     };
 
     enum RenderBufferType
@@ -128,15 +137,33 @@ namespace dmRender
         uint32_t                        m_VertexShaderDescSize;
         uint32_t                        m_FragmentShaderDescSize;
         uint32_t                        m_MaxCharacters;
+        uint32_t                        m_MaxBatches;
         uint32_t                        m_CommandBufferSize;
         /// Max debug vertex count
         /// NOTE: This is per debug-type and not the total sum
         uint32_t                        m_MaxDebugVertexCount;
     };
 
-    static const uint8_t RENDERLIST_INVALID_DISPATCH = 0xff;
+    struct RenderCameraData
+    {
+        dmVMath::Vector4 m_Viewport;
+        float            m_AspectRatio;
+        float            m_Fov;
+        float            m_NearZ;
+        float            m_FarZ;
+        float            m_OrthographicZoom;
+        uint8_t          m_AutoAspectRatio        : 1;
+        uint8_t          m_OrthographicProjection : 1;
+    };
 
-    static const HRenderType INVALID_RENDER_TYPE_HANDLE = ~0ULL;
+    struct MaterialProgramAttributeInfo
+    {
+        dmhash_t                           m_AttributeNameHash;
+        const dmGraphics::VertexAttribute* m_Attribute;
+        const uint8_t*                     m_ValuePtr;
+        dmhash_t                           m_ElementIds[4];
+        uint32_t                           m_ElementIndex;
+    };
 
     HRenderContext NewRenderContext(dmGraphics::HContext graphics_context, const RenderContextParams& params);
     Result DeleteRenderContext(HRenderContext render_context, dmScript::HContext script_context);
@@ -152,8 +179,12 @@ namespace dmRender
 
     const dmVMath::Matrix4& GetViewProjectionMatrix(HRenderContext render_context);
     const dmVMath::Matrix4& GetViewMatrix(HRenderContext render_context);
+    dmVMath::Matrix4 GetNormalMatrix(HRenderContext render_context, const dmVMath::Matrix4& world_matrix);
+
     void SetViewMatrix(HRenderContext render_context, const dmVMath::Matrix4& view);
     void SetProjectionMatrix(HRenderContext render_context, const dmVMath::Matrix4& projection);
+
+    HMaterial GetContextMaterial(HRenderContext render_context);
 
     Result ClearRenderObjects(HRenderContext context);
 
@@ -238,29 +269,29 @@ namespace dmRender
     void                            SetMaterialProgramConstantType(HMaterial material, dmhash_t name_hash, dmRenderDDF::MaterialDesc::ConstantType type);
     bool                            GetMaterialProgramConstant(HMaterial, dmhash_t name_hash, HConstant& out_value);
 
-    struct MaterialProgramAttributeInfo
-    {
-        dmhash_t                           m_AttributeNameHash;
-        const dmGraphics::VertexAttribute* m_Attribute;
-        const uint8_t*                     m_ValuePtr;
-        dmhash_t                           m_ElementIds[4];
-        uint32_t                           m_ElementIndex;
-    };
-
     dmGraphics::HVertexDeclaration  GetVertexDeclaration(HMaterial material);
+    dmGraphics::HVertexDeclaration  GetVertexDeclaration(HMaterial material, dmGraphics::VertexStepFunction step_function);
     bool                            GetMaterialProgramAttributeInfo(HMaterial material, dmhash_t name_hash, MaterialProgramAttributeInfo& info);
     void                            GetMaterialProgramAttributes(HMaterial material, const dmGraphics::VertexAttribute** attributes, uint32_t* attribute_count);
     void                            GetMaterialProgramAttributeValues(HMaterial material, uint32_t index, const uint8_t** value_ptr, uint32_t* num_values);
     void                            SetMaterialProgramAttributes(HMaterial material, const dmGraphics::VertexAttribute* attributes, uint32_t attributes_count);
+    void                            GetMaterialProgramAttributeMetadata(HMaterial material, dmGraphics::VertexAttributeInfoMetadata* metadata);
+    uint8_t                         GetMaterialAttributeIndex(HMaterial material, dmhash_t name_hash);
 
     // Compute
     HComputeProgram                 NewComputeProgram(HRenderContext render_context, dmGraphics::HComputeProgram shader);
     void                            DeleteComputeProgram(dmRender::HRenderContext render_context, HComputeProgram program);
+    HSampler                        GetComputeProgramSampler(HComputeProgram program, uint32_t unit);
     HRenderContext                  GetProgramRenderContext(HComputeProgram program);
     dmGraphics::HComputeProgram     GetComputeProgramShader(HComputeProgram program);
     dmGraphics::HProgram            GetComputeProgram(HComputeProgram program);
     uint64_t                        GetProgramUserData(HComputeProgram program);
     void                            SetProgramUserData(HComputeProgram program, uint64_t user_data);
+    void                            SetComputeProgramConstant(HComputeProgram compute_program, dmhash_t name_hash, dmVMath::Vector4* values, uint32_t count);
+    void                            SetComputeProgramConstantType(HComputeProgram compute_program, dmhash_t name_hash, dmRenderDDF::MaterialDesc::ConstantType type);
+    bool                            SetComputeProgramSampler(HComputeProgram compute_program, dmhash_t name_hash, uint32_t unit, dmGraphics::TextureWrap u_wrap, dmGraphics::TextureWrap v_wrap, dmGraphics::TextureFilter min_filter, dmGraphics::TextureFilter mag_filter, float max_anisotropy);
+    uint32_t                        GetComputeProgramSamplerUnit(HComputeProgram compute_program, dmhash_t name_hash);
+    bool                            GetComputeProgramConstant(HComputeProgram compute_program, dmhash_t name_hash, HConstant& out_value);
 
     /** Retrieve info about a hash related to a program constant
      * The function checks if the hash matches a constant or any element of it.
@@ -287,6 +318,7 @@ namespace dmRender
     void                            SetMaterialUserData2(HMaterial material, uint64_t user_data);
 
     void                            ApplyNamedConstantBuffer(dmRender::HRenderContext render_context, HMaterial material, HNamedConstantBuffer buffer);
+    void                            ApplyNamedConstantBuffer(dmRender::HRenderContext render_context, HComputeProgram program, HNamedConstantBuffer buffer);
 
     void                            ClearMaterialTags(HMaterial material);
     void                            SetMaterialTags(HMaterial material, uint32_t tag_count, const dmhash_t* tags);
@@ -327,6 +359,60 @@ namespace dmRender
     void                            TrimBuffer(HRenderContext render_context, HBufferedRenderBuffer buffer);
     void                            RewindBuffer(HRenderContext render_context, HBufferedRenderBuffer buffer);
 
+    /** Render cameras
+     * A render camera is a wrapper around common camera properties such as fov, near and far planes, viewport and aspect ratio.
+     * Within the engine, the render cameras are "owned" by the renderer, but they can be manipulated elsewhere.
+     * The render script can set current camera used for rendering by using render.set_camera(...), which will automatically
+     * take precedence over the view and projection matrices set by render.set_view() and render.set_projection().
+     */
+    HRenderCamera                   NewRenderCamera(HRenderContext context);
+    void                            DeleteRenderCamera(HRenderContext context, HRenderCamera camera);
+    void                            SetRenderCameraURL(HRenderContext render_context, HRenderCamera camera, const dmMessage::URL* camera_url);
+    void                            GetRenderCameraView(HRenderContext render_context, HRenderCamera camera, dmVMath::Matrix4* mtx);
+    void                            GetRenderCameraProjection(HRenderContext render_context, HRenderCamera camera, dmVMath::Matrix4* mtx);
+    void                            SetRenderCameraData(HRenderContext render_context, HRenderCamera camera, const RenderCameraData* data);
+    void                            GetRenderCameraData(HRenderContext render_context, HRenderCamera camera, RenderCameraData* data);
+    void                            UpdateRenderCamera(HRenderContext render_context, HRenderCamera camera, const dmVMath::Point3* position, const dmVMath::Quat* rotation);
+
+    static inline dmGraphics::TextureWrap WrapFromDDF(dmRenderDDF::MaterialDesc::WrapMode wrap_mode)
+    {
+        switch(wrap_mode)
+        {
+            case dmRenderDDF::MaterialDesc::WRAP_MODE_REPEAT:          return dmGraphics::TEXTURE_WRAP_REPEAT;
+            case dmRenderDDF::MaterialDesc::WRAP_MODE_MIRRORED_REPEAT: return dmGraphics::TEXTURE_WRAP_MIRRORED_REPEAT;
+            case dmRenderDDF::MaterialDesc::WRAP_MODE_CLAMP_TO_EDGE:   return dmGraphics::TEXTURE_WRAP_CLAMP_TO_EDGE;
+            default:break;
+        }
+        return dmGraphics::TEXTURE_WRAP_REPEAT;
+    }
+
+    static inline dmGraphics::TextureFilter FilterMinFromDDF(dmRenderDDF::MaterialDesc::FilterModeMin min_filter)
+    {
+        switch(min_filter)
+        {
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_NEAREST:                return dmGraphics::TEXTURE_FILTER_NEAREST;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_LINEAR:                 return dmGraphics::TEXTURE_FILTER_LINEAR;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_NEAREST_MIPMAP_NEAREST: return dmGraphics::TEXTURE_FILTER_NEAREST_MIPMAP_NEAREST;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_NEAREST_MIPMAP_LINEAR:  return dmGraphics::TEXTURE_FILTER_NEAREST_MIPMAP_LINEAR;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_LINEAR_MIPMAP_NEAREST:  return dmGraphics::TEXTURE_FILTER_LINEAR_MIPMAP_NEAREST;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_LINEAR_MIPMAP_LINEAR:   return dmGraphics::TEXTURE_FILTER_LINEAR_MIPMAP_LINEAR;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MIN_DEFAULT:                return dmGraphics::TEXTURE_FILTER_DEFAULT;
+            default:break;
+        }
+        return dmGraphics::TEXTURE_FILTER_DEFAULT;
+    }
+
+    static inline dmGraphics::TextureFilter FilterMagFromDDF(dmRenderDDF::MaterialDesc::FilterModeMag mag_filter)
+    {
+        switch(mag_filter)
+        {
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MAG_NEAREST: return dmGraphics::TEXTURE_FILTER_NEAREST;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MAG_LINEAR:  return dmGraphics::TEXTURE_FILTER_LINEAR;
+            case dmRenderDDF::MaterialDesc::FILTER_MODE_MAG_DEFAULT: return dmGraphics::TEXTURE_FILTER_DEFAULT;
+            default:break;
+        }
+        return dmGraphics::TEXTURE_FILTER_DEFAULT;
+    }
 }
 
 #endif /* DM_RENDER_H */

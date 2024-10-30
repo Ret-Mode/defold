@@ -30,20 +30,22 @@
             [dynamo.graph :as g]
             [editor.code.data :as data]
             [editor.core :as core]
+            [editor.defold-project :as project]
             [editor.defold-project-search :as project-search]
             [editor.error-reporting :as error-reporting]
             [editor.field-expression :as field-expression]
             [editor.fxui :as fxui]
-            [editor.icons :as icons]
             [editor.outline :as outline]
             [editor.prefs :as prefs]
             [editor.properties :as properties]
+            [editor.protobuf :as protobuf]
             [editor.resource :as resource]
             [editor.resource-node :as resource-node]
             [editor.types :as types]
             [editor.ui :as ui]
             [editor.workspace :as workspace]
-            [util.coll :refer [flipped-pair]])
+            [util.coll :refer [flipped-pair]]
+            [util.fn :as fn])
   (:import [java.util Collection]
            [javafx.animation AnimationTimer]
            [javafx.event Event]
@@ -51,8 +53,8 @@
            [javafx.scene Parent Scene]
            [javafx.scene.control CheckBox Label ProgressIndicator SelectionMode TextField TreeItem TreeTableView TreeView]
            [javafx.scene.input KeyCode KeyEvent MouseEvent]
-           [javafx.scene.paint Color]
            [javafx.scene.layout AnchorPane HBox Priority]
+           [javafx.scene.paint Color]
            [javafx.stage StageStyle]))
 
 (set! *warn-on-reflection* true)
@@ -116,49 +118,106 @@
     (ui/timer-start! timer)
     timer))
 
-(defn- make-matched-item-icon
-  [{:keys [resource] :as _item}]
-  (-> resource
-      workspace/resource-icon
-      (icons/get-image-view 16)))
-
-(defn- make-matched-item-row-indicator
+(defn- make-matched-text-item-row-indicator
   ^Label [{:keys [^long row] :as _item}]
   (doto (Label. (str (inc row) ": "))
     (ui/add-style! "line-number")
     (.setMinWidth Label/USE_PREF_SIZE)))
 
-(defn- make-matched-item-before-text
-  ^Label [{:keys [^String line ^long start-col] :as _item}]
-  (when-some [before-text (not-empty (string/triml (subs line 0 start-col)))]
+(defn- make-matched-text-item-before-text
+  ^Label [{:keys [^String text ^long start-col] :as _item}]
+  (when-some [before-text (not-empty (string/triml (subs text 0 start-col)))]
     (doto (Label. before-text)
       (HBox/setHgrow Priority/ALWAYS)
       (.setPrefWidth Label/USE_COMPUTED_SIZE))))
 
-(defn- make-matched-item-match-text
-  ^Label [{:keys [^String line ^long start-col ^long end-col] :as _item}]
-  (let [match-text (subs line start-col end-col)]
+(defn- make-matched-text-item-match-text
+  ^Label [{:keys [^String text ^long start-col ^long end-col] :as _item}]
+  (let [match-text (subs text start-col end-col)]
     (doto (Label. match-text)
       (ui/add-style! "matched")
       (.setMinWidth Label/USE_PREF_SIZE))))
 
-(defn- make-matched-item-after-text
-  ^Label [{:keys [^String line ^long end-col] :as _item}]
-  (when-some [after-text (not-empty (string/trimr (subs line end-col)))]
+(defn- make-matched-text-item-after-text
+  ^Label [{:keys [^String text ^long end-col] :as _item}]
+  (when-some [after-text (not-empty (string/trimr (subs text end-col)))]
     (doto (Label. after-text)
       (HBox/setHgrow Priority/ALWAYS))))
 
-(defn- make-matched-item-graphic [item]
+(defn- make-matched-item-value-path
+  ^Label [path-tokens]
+  (doto (Label. (str (string/join " \u2192 " path-tokens) ": ")) ; "->" (RIGHTWARDS ARROW)
+    (ui/add-style! "value-path")
+    (.setMinWidth Label/USE_PREF_SIZE)))
+
+(defn- make-matched-protobuf-item-value-path
+  ^Label [{:keys [path] :as _item}]
+  (make-matched-item-value-path
+    (map (fn [token]
+           (cond-> token
+                   (keyword? token)
+                   (protobuf/keyword->field-name)))
+         path)))
+
+(defn- make-matched-setting-item-value-path
+  ^Label [{:keys [path] :as _item}]
+  (make-matched-item-value-path path))
+
+(defn- make-matched-item-graphic-impl
+  ^HBox [item child-node-fns]
   (let [children (ui/node-array
                    (keep #(% item)
-                         [make-matched-item-icon
-                          make-matched-item-row-indicator
-                          make-matched-item-before-text
-                          make-matched-item-match-text
-                          make-matched-item-after-text]))]
+                         child-node-fns))]
     (doto (HBox. children)
       (.setPrefWidth 0.0)
       (.setAlignment Pos/CENTER_LEFT))))
+
+(defmulti ^:private make-matched-item-graphic :match-type)
+
+(defmethod make-matched-item-graphic :match-type-text [item]
+  (make-matched-item-graphic-impl
+    item
+    [make-matched-text-item-row-indicator
+     make-matched-text-item-before-text
+     make-matched-text-item-match-text
+     make-matched-text-item-after-text]))
+
+(defmethod make-matched-item-graphic :match-type-protobuf [item]
+  (make-matched-item-graphic-impl
+    item
+    [make-matched-protobuf-item-value-path
+     make-matched-text-item-before-text
+     make-matched-text-item-match-text
+     make-matched-text-item-after-text]))
+
+(defmethod make-matched-item-graphic :match-type-setting [item]
+  (make-matched-item-graphic-impl
+    item
+    [make-matched-setting-item-value-path
+     make-matched-text-item-before-text
+     make-matched-text-item-match-text
+     make-matched-text-item-after-text]))
+
+(defmulti ^:private make-matched-item-open-opts :match-type)
+
+(defmethod make-matched-item-open-opts :match-type-text [item]
+  (let [row (:row item)
+        cursor-range (data/->CursorRange (data/->Cursor row (:start-col item))
+                                         (data/->Cursor row (:end-col item)))]
+    ;; NOTE:
+    ;; :caret-position is here to support Open as Text.
+    ;; We might want to remove it now that all text
+    ;; files are opened using the code editor.
+    {:caret-position (:caret-position item)
+     :cursor-range cursor-range}))
+
+(defmethod make-matched-item-open-opts :match-type-protobuf [item]
+  ;; TODO: Make the view select and focus on the matching property.
+  {:value-path (:path item)})
+
+(defmethod make-matched-item-open-opts :match-type-setting [item]
+  ;; TODO: Make the view select and focus on the matching property.
+  {:value-path (:path item)})
 
 (defn- init-search-in-files-tree-view! [^TreeView tree-view]
   (ui/customize-tree-view! tree-view {:double-click-expand? false})
@@ -195,25 +254,17 @@
                     [item {}])
                   (let [resource (:resource item)]
                     (when (resource/exists? resource)
-                      (let [row (:row item)
-                            cursor-range (data/->CursorRange (data/->Cursor row (:start-col item))
-                                                             (data/->Cursor row (:end-col item)))
-                            ;; NOTE:
-                            ;; :caret-position is here to support Open as Text.
-                            ;; We might want to remove it now that all text
-                            ;; files are opened using the code editor.
-                            opts {:caret-position (:caret-position item)
-                                  :cursor-range cursor-range}]
+                      (let [opts (make-matched-item-open-opts item)]
                         [resource opts]))))))
         selection))
 
-(def ^:private search-in-files-term-prefs-key "search-in-files-term")
-(def ^:private search-in-files-exts-prefs-key "search-in-files-exts")
-(def ^:private search-in-files-include-libraries-prefs-key "search-in-files-include-libraries")
+(def ^:private search-in-files-term-prefs-key [:search-in-files :term])
+(def ^:private search-in-files-exts-prefs-key [:search-in-files :exts])
+(def ^:private search-in-files-include-libraries-prefs-key [:search-in-files :include-libraries])
 
 (defn set-search-term! [prefs term]
   (assert (string? term))
-  (prefs/set-prefs prefs search-in-files-term-prefs-key term))
+  (prefs/set! prefs search-in-files-term-prefs-key term))
 
 (defn- start-search-in-files! [project prefs results-tab-tree-view results-tab-progress-indicator open-fn show-find-results-fn]
   (let [root      ^Parent (ui/load-fxml "search-in-files-dialog.fxml")
@@ -230,15 +281,16 @@
                                %)
             stop-consumer! ui/timer-stop!
             report-error! (fn [error] (ui/run-later (throw error)))
-            file-resource-save-data-future (project-search/make-file-resource-save-data-future report-error! project)
-            {:keys [abort-search! start-search!]} (project-search/make-file-searcher file-resource-save-data-future start-consumer! stop-consumer! report-error!)
+            workspace (project/workspace project)
+            search-data-future (project-search/make-search-data-future report-error! project)
+            {:keys [abort-search! start-search!]} (project-search/make-file-searcher workspace search-data-future start-consumer! stop-consumer! report-error!)
             on-input-changed! (fn [_ _ _]
                                 (let [term (.getText search)
                                       exts (.getText types)
                                       include-libraries? (.isSelected include-libraries-check-box)]
-                                  (prefs/set-prefs prefs search-in-files-term-prefs-key term)
-                                  (prefs/set-prefs prefs search-in-files-exts-prefs-key exts)
-                                  (prefs/set-prefs prefs search-in-files-include-libraries-prefs-key include-libraries?)
+                                  (prefs/set! prefs search-in-files-term-prefs-key term)
+                                  (prefs/set! prefs search-in-files-exts-prefs-key exts)
+                                  (prefs/set! prefs search-in-files-include-libraries-prefs-key include-libraries?)
                                   (start-search! term exts include-libraries?)))
             dismiss-and-abort-search! (fn []
                                         (abort-search!)
@@ -278,9 +330,9 @@
                                                 (ui/request-focus! search))
                                nil))))
 
-        (let [term (prefs/get-prefs prefs search-in-files-term-prefs-key "")
-              exts (prefs/get-prefs prefs search-in-files-exts-prefs-key "")
-              include-libraries? (prefs/get-prefs prefs search-in-files-include-libraries-prefs-key true)]
+        (let [term (prefs/get prefs search-in-files-term-prefs-key)
+              exts (prefs/get prefs search-in-files-exts-prefs-key)
+              include-libraries? (prefs/get prefs search-in-files-include-libraries-prefs-key)]
           (ui/text! search term)
           (ui/text! types exts)
           (ui/value! include-libraries-check-box include-libraries?)
@@ -431,7 +483,7 @@
 (defmethod override-value-cell-view resource/Resource [{:keys [value open-resource-fn] :as property}]
   {:fx/type fx.hyperlink/lifecycle
    :style-class (into ["override-inspector-hyperlink"] (overridden-style-classes property))
-   :on-action (fxui/partial #'open-hyperlink-resource! open-resource-fn value)
+   :on-action (fn/partial #'open-hyperlink-resource! open-resource-fn value)
    :text (resource/resource->proj-path value)})
 
 (defn- value-cell [open-resource-fn property]
@@ -482,7 +534,7 @@
             :anchor-pane/left 0
             :anchor-pane/right 0
             :fixed-cell-size 24
-            :event-filter (fxui/partial #'tree-table-view-event-filter open-resource-fn)
+            :event-filter (fn/partial #'tree-table-view-event-filter open-resource-fn)
             :columns (into [{:fx/type fx.tree-table-column/lifecycle
                              :text "Resource"
                              :cell-value-factory identity
@@ -492,9 +544,9 @@
                                   {:fx/type fx.tree-table-column/lifecycle
                                    :text (str (properties/keyword->name property-keyword)
                                               (property-column-suffix (property-value property-keyword state)))
-                                   :cell-value-factory (fxui/partial #'property-value property-keyword)
+                                   :cell-value-factory (fn/partial #'property-value property-keyword)
                                    :cell-factory {:fx/cell-type fx.tree-table-cell/lifecycle
-                                                  :describe (fxui/partial #'value-cell open-resource-fn)}}))
+                                                  :describe (fn/partial #'value-cell open-resource-fn)}}))
                            (:display-order state))
             :root (->tree-item state)})]}]}}))
 

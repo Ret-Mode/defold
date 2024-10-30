@@ -30,11 +30,9 @@
 #include "scripts/script_factory.h"
 #include "scripts/script_collection_factory.h"
 #include "scripts/script_resource.h"
-#include "scripts/script_model.h"
 #include "scripts/script_window.h"
 #include "scripts/script_collectionproxy.h"
 #include "scripts/script_buffer.h"
-#include "scripts/script_image.h"
 #include "scripts/script_sys_gamesys.h"
 #include "scripts/script_camera.h"
 #include "scripts/script_http.h"
@@ -106,11 +104,11 @@ namespace dmScript {
         return instance ? dmGameObject::GetCollection(instance) : 0;
     }
 
-    void GetComponentFromLua(lua_State* L, int index, const char* component_type, void** out_world, void** component, dmMessage::URL* url)
+    void GetComponentFromLua(lua_State* L, int index, const char* component_type, dmGameObject::HComponentWorld* out_world, dmGameObject::HComponent* component, dmMessage::URL* url)
     {
         dmGameObject::HInstance instance = CheckGOInstance(L, index);
         dmGameObject::HCollection collection = dmGameObject::GetCollection(instance);
-        GetComponentUserDataFromLua(L, index, collection, component_type, (uintptr_t*)component, url, out_world);
+        dmGameObject::GetComponentFromLua(L, index, collection, component_type, component, url, out_world);
     }
 }
 
@@ -143,10 +141,8 @@ namespace dmGameSystem
         ScriptSpriteRegister(context);
         ScriptSoundRegister(context);
         ScriptResourceRegister(context);
-        ScriptModelRegister(context);
         ScriptWindowRegister(context);
         ScriptCollectionProxyRegister(context);
-        ScriptImageRegister(context);
         ScriptSysGameSysRegister(context);
         ScriptHttpRegister(context);
 

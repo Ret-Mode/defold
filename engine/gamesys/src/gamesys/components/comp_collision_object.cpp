@@ -343,6 +343,9 @@ namespace dmGameSystem
                     {
                         uint32_t cell_x = cell->m_X - tile_grid_resource->m_MinCellX;
                         uint32_t cell_y = cell->m_Y - tile_grid_resource->m_MinCellY;
+                        flags.m_FlipHorizontal = cell->m_HFlip;
+                        flags.m_FlipVertical = cell->m_VFlip;
+                        flags.m_Rotate90 = cell->m_Rotate90;
                         dmPhysics::SetGridShapeHull(component->m_Object2D, i, cell_y, cell_x, tile, flags);
                         uint32_t child = cell_x + tile_grid_resource->m_ColumnCount * cell_y;
                         uint16_t group = GetGroupBitIndex(world, texture_set_resource->m_HullCollisionGroups[tile], false);
@@ -474,6 +477,11 @@ namespace dmGameSystem
         }
         *params.m_UserData = (uintptr_t)component;
         return dmGameObject::CREATE_RESULT_OK;
+    }
+
+    void* CompCollisionObjectGetComponent(const dmGameObject::ComponentGetParams& params)
+    {
+        return (void*)params.m_UserData;
     }
 
     dmGameObject::CreateResult CompCollisionObjectFinal(const dmGameObject::ComponentFinalParams& params)
@@ -680,7 +688,8 @@ namespace dmGameSystem
                 dmPhysicsDDF::ContactPoint& a = ddf.m_A;
                 a.m_Group               = group_hash_a;
                 a.m_Id                  = instance_a_id;
-                a.m_Position            = dmGameObject::GetWorldPosition(instance_a);
+                a.m_Position            = contact_point.m_PositionA;
+                a.m_InstancePosition    = dmGameObject::GetWorldPosition(instance_a);
                 a.m_Mass                = mass_a;
                 a.m_RelativeVelocity    = -contact_point.m_RelativeVelocity;
                 a.m_Normal              = -contact_point.m_Normal;
@@ -688,7 +697,8 @@ namespace dmGameSystem
                 dmPhysicsDDF::ContactPoint& b = ddf.m_B;
                 b.m_Group               = group_hash_b;
                 b.m_Id                  = instance_b_id;
-                b.m_Position            = dmGameObject::GetWorldPosition(instance_b);
+                b.m_Position            = contact_point.m_PositionB;
+                b.m_InstancePosition    = dmGameObject::GetWorldPosition(instance_b);
                 b.m_Mass                = mass_b;
                 b.m_RelativeVelocity    = contact_point.m_RelativeVelocity;
                 b.m_Normal              = contact_point.m_Normal;
@@ -892,62 +902,56 @@ namespace dmGameSystem
 
     struct DispatchContext
     {
-        PhysicsContext* m_PhysicsContext;
-        bool m_Success;
-        dmGameObject::HCollection m_Collection;
-        CollisionWorld* m_World;
+        PhysicsContext*         m_PhysicsContext;
+        dmGameObject::HRegister m_Register;
+        uint32_t                m_ComponentTypeIndex;
+        bool                    m_Success;
     };
 
-    void DispatchCallback(dmMessage::Message *message, void* user_ptr)
+    void DispatchCallback(dmMessage::Message* message, void* user_ptr)
     {
         DispatchContext* context = (DispatchContext*)user_ptr;
-        if (message->m_Descriptor != 0)
+
+        if (message->m_Descriptor == 0)
+            return;
+
+        dmDDF::Descriptor* descriptor = (dmDDF::Descriptor*)message->m_Descriptor;
+        if (descriptor == dmPhysicsDDF::RequestRayCast::m_DDFDescriptor)
         {
-            dmDDF::Descriptor* descriptor = (dmDDF::Descriptor*)message->m_Descriptor;
-            if (descriptor == dmPhysicsDDF::RequestRayCast::m_DDFDescriptor)
+            dmPhysicsDDF::RequestRayCast* ddf = (dmPhysicsDDF::RequestRayCast*)message->m_Data;
+
+            dmhash_t coll_name_hash = dmMessage::GetSocketNameHash(message->m_Sender.m_Socket);
+
+            // Target collection which can be different than we are updating for.
+            dmGameObject::HCollection collection = dmGameObject::GetCollectionByHash(context->m_Register, coll_name_hash);
+            if (!collection) // if the collection has been removed
+                return;
+
+            // NOTE! The collision world for the target collection is looked up using this worlds component index
+            //       which is assumed to be the same as in the target collection.
+            uint32_t component_type_index = context->m_ComponentTypeIndex;
+            CollisionWorld* world = (CollisionWorld*) dmGameObject::GetWorld(collection, component_type_index);
+
+            // Give that the assumption above holds, this assert will hold too.
+            assert(world->m_ComponentTypeIndex == component_type_index);
+
+            dmMessage::URL* receiver = (dmMessage::URL*)malloc(sizeof(dmMessage::URL));
+            memcpy(receiver, &message->m_Sender, sizeof(*receiver));
+
+            dmPhysics::RayCastRequest request;
+            request.m_From = ddf->m_From;
+            request.m_To = ddf->m_To;
+            request.m_Mask = ddf->m_Mask;
+            request.m_UserId = (ddf->m_RequestId & 0xff);
+            request.m_UserData = (void*)receiver;
+            request.m_IgnoredUserData = 0;
+            if (world->m_3D)
             {
-                dmPhysicsDDF::RequestRayCast* ddf = (dmPhysicsDDF::RequestRayCast*)message->m_Data;
-                dmGameObject::HInstance sender_instance = (dmGameObject::HInstance)message->m_UserData1;
-                uint16_t component_index;
-                dmGameObject::Result go_result = dmGameObject::GetComponentIndex(sender_instance, message->m_Sender.m_Fragment, &component_index);
-                if (go_result != dmGameObject::RESULT_OK)
-                {
-                    dmLogError("Component index could not be retrieved when handling '%s': %d.", dmPhysicsDDF::RequestRayCast::m_DDFDescriptor->m_Name, go_result);
-                    context->m_Success = false;
-                }
-                else
-                {
-                    // Target collection which can be different than we are updating for.
-                    dmGameObject::HCollection collection = dmGameObject::GetCollection(sender_instance);
-
-                    // NOTE! The collision world for the target collection is looked up using this worlds component index
-                    //       which is assumed to be the same as in the target collection.
-                    CollisionWorld* world = (CollisionWorld*) dmGameObject::GetWorld(collection, context->m_World->m_ComponentTypeIndex);
-
-                    // Give that the assumption above holds, this assert will hold too.
-                    assert(world->m_ComponentTypeIndex == context->m_World->m_ComponentTypeIndex);
-
-                    dmMessage::URL* receiver = (dmMessage::URL*)malloc(sizeof(dmMessage::URL));
-                    dmMessage::ResetURL(receiver);
-                    receiver->m_Socket = dmGameObject::GetMessageSocket(collection);
-                    receiver->m_Path = dmGameObject::GetIdentifier(sender_instance);
-                    
-                    dmPhysics::RayCastRequest request;
-                    request.m_From = ddf->m_From;
-                    request.m_To = ddf->m_To;
-                    request.m_IgnoredUserData = sender_instance;
-                    request.m_Mask = ddf->m_Mask;
-                    request.m_UserId = component_index << 16 | (ddf->m_RequestId & 0xff);
-                    request.m_UserData = (void*)receiver;
-                    if (world->m_3D)
-                    {
-                        dmPhysics::RequestRayCast3D(world->m_World3D, request);
-                    }
-                    else
-                    {
-                        dmPhysics::RequestRayCast2D(world->m_World2D, request);
-                    }
-                }
+                dmPhysics::RequestRayCast3D(world->m_World3D, request);
+            }
+            else
+            {
+                dmPhysics::RequestRayCast2D(world->m_World2D, request);
             }
         }
     }
@@ -986,8 +990,9 @@ namespace dmGameSystem
         DispatchContext dispatch_context;
         dispatch_context.m_PhysicsContext = physics_context;
         dispatch_context.m_Success = true;
-        dispatch_context.m_World = world;
-        dispatch_context.m_Collection = collection;
+        dispatch_context.m_ComponentTypeIndex = world->m_ComponentTypeIndex;
+        dispatch_context.m_Register = dmGameObject::GetRegister(collection);
+
         dmMessage::HSocket physics_socket;
         if (physics_context->m_3D)
         {
@@ -998,6 +1003,7 @@ namespace dmGameSystem
             physics_socket = dmPhysics::GetSocket2D(physics_context->m_Context2D);
 
         }
+
         dmMessage::Dispatch(physics_socket, DispatchCallback, (void*)&dispatch_context);
         return dispatch_context.m_Success;
     }
@@ -1276,7 +1282,7 @@ namespace dmGameSystem
                 dmLogError("SetGridShapeHull: unable to set hull %d for shape %d", hull, ddf->m_Shape);
                 return dmGameObject::UPDATE_RESULT_UNKNOWN_ERROR;
             }
-            uint16_t child = column + tile_grid_resource->m_ColumnCount * row;
+            uint32_t child = column + tile_grid_resource->m_ColumnCount * row;
             uint16_t group = 0;
             uint16_t mask = 0;
             // Hull-index of 0xffffffff is empty cell
@@ -2059,7 +2065,7 @@ namespace dmGameSystem
             *maskbit = dmPhysics::GetMaskBit2D(component->m_Object2D, groupbit);
         }
         return true;
-	}
+    }
 
     // returns false if no such collision group has been registered
     bool SetCollisionMaskBit(void* _world, void* _component, dmhash_t group_hash, bool boolvalue)
@@ -2138,5 +2144,28 @@ namespace dmGameSystem
         pit->m_Node = node;
         pit->m_Next = 0;
         pit->m_FnIterateNext = CompCollisionIterPropertiesGetNext;
+    }
+
+    b2World* CompCollisionObjectGetBox2DWorld(dmGameObject::HComponentWorld _world)
+    {
+        CollisionWorld* world = (CollisionWorld*)_world;
+        if (world->m_3D)
+            return 0;
+        return (b2World*)dmPhysics::GetWorldContext2D(world->m_World2D);
+    }
+
+    b2Body* CompCollisionObjectGetBox2DBody(dmGameObject::HComponent _component)
+    {
+        CollisionComponent* component = (CollisionComponent*)_component;
+        if (component->m_3D)
+            return 0;
+        return (b2Body*)dmPhysics::GetCollisionObjectContext2D(component->m_Object2D);
+    }
+
+    // We use this to determine if a physics object is still alive, by determinig if the game object is still alive
+    dmGameObject::HInstance CompCollisionObjectGetInstance(void* _user_data)
+    {
+        CollisionComponent* component = (CollisionComponent*)_user_data; // See SetCollisionObjectData and dmPhysics::NewCollisionObject2D
+        return component->m_Instance;
     }
 }

@@ -64,6 +64,7 @@ public class ExtenderUtil {
 
     public static final String appManifestPath = "_app/" + ExtenderClient.appManifestFilename;
     public static final String proguardPath = "_app/app.pro";
+    public static final String privacyManifestPath = "_app/PrivacyInfo.xcprivacy";
     public static final String JAR_RE = "(.+\\.jar)";
 
     private static class FSExtenderResource implements ExtenderResource {
@@ -177,11 +178,11 @@ public class ExtenderUtil {
             this.content = content;
 		}
 
-		@Override
-		public byte[] sha1() throws IOException {
+        @Override
+        public byte[] sha1(boolean allowCached) throws IOException {
             byte[] content = getContent();
             if (content == null) {
-                throw new IllegalArgumentException(String.format("Resource '%s' is not created", getPath()));
+                throw new IllegalArgumentException(String.format("Resource '%s' is not created", path));
             }
             MessageDigest sha1;
             try {
@@ -191,7 +192,12 @@ public class ExtenderUtil {
             }
             sha1.update(content);
             return sha1.digest();
-		}
+        }
+
+        @Override
+        public byte[] sha1() throws IOException {
+            return sha1(false);
+        }
 
 		@Override
 		public boolean exists() {
@@ -530,6 +536,20 @@ public class ExtenderUtil {
             IResource resource = getProjectResource(project, "android", "proguard");
             if (resource != null) {
                 sources.add(new FSAliasResource(resource, project.getRootDirectory(), proguardPath));
+            }
+        }
+
+        // For iOS and macOS only: Add the project privacy manifest 
+        if (platform == Platform.Arm64Ios || platform == Platform.X86_64Ios) {
+            IResource resource = getProjectResource(project, "ios", "privacymanifest");
+            if (resource != null) {
+                sources.add(new FSAliasResource(resource, project.getRootDirectory(), privacyManifestPath));
+            }
+        }
+        else if (platform == Platform.Arm64MacOS || platform == Platform.X86_64MacOS) {
+            IResource resource = getProjectResource(project, "osx", "privacymanifest");
+            if (resource != null) {
+                sources.add(new FSAliasResource(resource, project.getRootDirectory(), privacyManifestPath));
             }
         }
 

@@ -19,15 +19,17 @@
 #include <dlib/log.h>
 #include <dlib/profile.h>
 #include <dlib/time.h>
-#include <extension/extension.h>
+
 #include <render/render.h>
 #include <script/script.h>
-#include <dmsdk/dlib/vmath.h>
 
 #include "profiler_private.h"
 #include "profile_render.h"
 
 #include <algorithm> // std::sort
+
+#include <dmsdk/dlib/vmath.h>
+#include <dmsdk/extension/extension.h>
 
 DM_PROPERTY_GROUP(rmtp_Profiler, "Profiler");
 DM_PROPERTY_U32(rmtp_CpuUsage, 0, FrameReset, "%% Cpu Usage", &rmtp_Profiler);
@@ -103,6 +105,11 @@ void RenderProfiler(dmProfile::HProfile profile, dmGraphics::HContext graphics_c
 
         dmProfileRender::UpdateRenderProfile(gRenderProfile, g_ProfilerCurrentFrame);
 
+        // Enable alpha blending
+        dmGraphics::PipelineState ps_before = dmGraphics::GetPipelineState(graphics_context);
+        dmGraphics::EnableState(graphics_context, dmGraphics::STATE_BLEND);
+        dmGraphics::SetBlendFunc(graphics_context, dmGraphics::BLEND_FACTOR_ONE, dmGraphics::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+
         dmRender::RenderListBegin(render_context);
         dmProfileRender::Draw(gRenderProfile, render_context, system_font_map);
         dmRender::RenderListEnd(render_context);
@@ -110,6 +117,13 @@ void RenderProfiler(dmProfile::HProfile profile, dmGraphics::HContext graphics_c
         dmRender::SetProjectionMatrix(render_context, dmVMath::Matrix4::orthographic(0.0f, dmGraphics::GetWindowWidth(graphics_context), 0.0f, dmGraphics::GetWindowHeight(graphics_context), 1.0f, -1.0f));
         dmRender::DrawRenderList(render_context, 0, 0, 0);
         dmRender::ClearRenderObjects(render_context);
+
+        // Restore blend state
+        if (!ps_before.m_BlendEnabled)
+        {
+            dmGraphics::DisableState(graphics_context, dmGraphics::STATE_BLEND);
+        }
+        dmGraphics::SetBlendFunc(graphics_context, (dmGraphics::BlendFactor) ps_before.m_BlendSrcFactor, (dmGraphics::BlendFactor) ps_before.m_BlendDstFactor);
     }
 
     if (g_ProfilerCurrentFrame)
@@ -722,6 +736,9 @@ static dmExtension::Result FinalizeProfiler(dmExtension::Params* params)
 
 static dmExtension::Result AppInitializeProfiler(dmExtension::AppParams* params)
 {
+    // Note that the callback might come from a different thread!
+    g_ProfilerMutex = dmMutex::New();
+
     g_ProfilerPort = dmConfigFile::GetInt(params->m_ConfigFile, "profiler.port", 0);
 
     g_ProfilerCurrentFrame = new dmProfileRender::ProfilerFrame;
@@ -737,11 +754,10 @@ static dmExtension::Result AppInitializeProfiler(dmExtension::AppParams* params)
     {
         delete g_ProfilerCurrentFrame;
         g_ProfilerCurrentFrame = 0;
+        dmMutex::Delete(g_ProfilerMutex);
+        g_ProfilerMutex = 0;
         return dmExtension::RESULT_OK;
     }
-
-    // Note that the callback might come from a different thread!
-    g_ProfilerMutex = dmMutex::New();
 
     g_ProfilerThreadSortOrder.SetCapacity(7, 8);
     g_ProfilerThreadSortOrder.Put(dmHashString64("Main"), 0);

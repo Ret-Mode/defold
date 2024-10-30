@@ -71,10 +71,12 @@ def is_platform_private(platform):
 def platform_supports_feature(platform, feature, data):
     if is_platform_private(platform):
         return waf_dynamo_vendor.supports_feature(platform, feature, data)
-    if feature == 'vulkan':
-        return platform not in ['js-web', 'wasm-web', 'x86_64-ios', 'x86_64-linux']
-    if feature == 'compute':
-        return platform in ['x86_64-linux', 'x86_64-macos', 'arm64-macos', 'win32', 'x86_64-win32']
+    if feature == 'vulkan' or feature == 'compute':
+        return platform not in ['js-web', 'wasm-web', 'x86_64-ios']
+    if feature == 'opengl_compute':
+        return platform not in ['js-web', 'wasm-web', 'x86_64-ios', 'arm64-ios', 'arm64-macos', 'x86_64-macos']
+    if feature == 'webgpu':
+        return platform in ['js-web', 'wasm-web']
     return waf_dynamo_vendor.supports_feature(platform, feature, data)
 
 def platform_setup_tools(ctx, build_util):
@@ -86,17 +88,15 @@ def platform_setup_vars(ctx, build_util):
 def transform_runnable_path(platform, path):
     return waf_dynamo_vendor.transform_runnable_path(platform, path)
 
+def platform_glfw_version(platform):
+    if platform in ['x86_64-macos', 'arm64-macos', 'x86_64-win32', 'win32']:
+        return 3
+    return 2
+
 # Note that some of these version numbers are also present in build.py (TODO: put in a waf_versions.py or similar)
 # The goal is to put the sdk versions in sdk.py
 SDK_ROOT=sdk.SDK_ROOT
 
-ANDROID_ROOT=SDK_ROOT
-ANDROID_BUILD_TOOLS_VERSION = '33.0.1'
-ANDROID_NDK_API_VERSION='19' # Android 4.4
-ANDROID_NDK_ROOT=os.path.join(SDK_ROOT,'android-ndk-r%s' % sdk.ANDROID_NDK_VERSION)
-ANDROID_TARGET_API_LEVEL='33' # Android 13.0
-ANDROID_MIN_API_LEVEL='19'
-ANDROID_64_NDK_API_VERSION='21' # Android 5.0
 EMSCRIPTEN_ROOT=os.environ.get('EMSCRIPTEN', '')
 
 CLANG_VERSION='clang-13.0.0'
@@ -264,9 +264,9 @@ def getAndroidCompilerName(target_arch, api_version):
 
 def getAndroidNDKAPIVersion(target_arch):
     if target_arch == 'arm64':
-        return ANDROID_64_NDK_API_VERSION
+        return sdk.ANDROID_64_NDK_API_VERSION
     else:
-        return ANDROID_NDK_API_VERSION
+        return sdk.ANDROID_NDK_API_VERSION
 
 def getAndroidCompileFlags(target_arch):
     # NOTE compared to armv7-android:
@@ -389,17 +389,18 @@ def default_flags(self):
         swift_dir = "%s/usr/lib/swift-%s/macosx" % (sdk.get_toolchain_root(self.sdkinfo, self.env['PLATFORM']), sdk.SWIFT_VERSION)
 
         for f in ['CFLAGS', 'CXXFLAGS']:
-            self.env.append_value(f, ['-g', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-DGOOGLE_PROTOBUF_NO_RTTI', '-Wall', '-Werror=format', '-fno-exceptions','-fPIC', '-fvisibility=hidden'])
+            self.env.append_value(f, ['-g', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-DGOOGLE_PROTOBUF_NO_RTTI', '-Wall', '-Werror=format', '-fPIC', '-fvisibility=hidden'])
             self.env.append_value(f, ['-DDM_PLATFORM_MACOS'])
 
-            if f == 'CXXFLAGS':
-                self.env.append_value(f, ['-fno-rtti'])
-
-            self.env.append_value(f, ['-stdlib=libc++', '-DGL_DO_NOT_WARN_IF_MULTI_GL_VERSION_HEADERS_INCLUDED', '-DGL_SILENCE_DEPRECATION'])
+            self.env.append_value(f, ['-DGL_DO_NOT_WARN_IF_MULTI_GL_VERSION_HEADERS_INCLUDED', '-DGL_SILENCE_DEPRECATION'])
             self.env.append_value(f, '-mmacosx-version-min=%s' % sdk.VERSION_MACOSX_MIN)
 
-            self.env.append_value(f, ['-isysroot', sys_root, '-nostdinc++', '-isystem', '%s/usr/include/c++/v1' % sys_root])
+            self.env.append_value(f, ['-isysroot', sys_root])
             self.env.append_value(f, ['-target', '%s-apple-darwin19' % build_util.get_target_architecture()])
+
+            if f == 'CXXFLAGS':
+                self.env.append_value(f, ['-fno-rtti', '-stdlib=libc++', '-fno-exceptions', '-nostdinc++'])
+                self.env.append_value(f, ['-isystem', '%s/usr/include/c++/v1' % sys_root])
 
         self.env.append_value('LINKFLAGS', ['-stdlib=libc++', '-isysroot', sys_root, '-mmacosx-version-min=%s' % sdk.VERSION_MACOSX_MIN, '-framework', 'Carbon','-flto'])
         self.env.append_value('LINKFLAGS', ['-target', '%s-apple-darwin19' % build_util.get_target_architecture()])
@@ -427,10 +428,13 @@ def default_flags(self):
             swift_dir = "%s/usr/lib/swift-%s/iphonesimulator" % (sdk.get_toolchain_root(self.sdkinfo, self.env['PLATFORM']), sdk.SWIFT_VERSION)
 
         for f in ['CFLAGS', 'CXXFLAGS']:
-            self.env.append_value(f, extra_ccflags + ['-g', '-stdlib=libc++', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-DGOOGLE_PROTOBUF_NO_RTTI', '-Wall', '-fno-exceptions', '-fno-rtti', '-fvisibility=hidden',
+            self.env.append_value(f, extra_ccflags + ['-g', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-DGOOGLE_PROTOBUF_NO_RTTI', '-Wall', '-fvisibility=hidden',
                                             '-arch', build_util.get_target_architecture(), '-miphoneos-version-min=%s' % sdk.VERSION_IPHONEOS_MIN])
+            self.env.append_value(f, ['-isysroot', sys_root])
 
-            self.env.append_value(f, ['-isysroot', sys_root, '-nostdinc++', '-isystem', '%s/usr/include/c++/v1' % sys_root])
+            if f == 'CXXFLAGS':
+                self.env.append_value(f, ['-fno-exceptions', '-fno-rtti', '-stdlib=libc++', '-nostdinc++'])
+                self.env.append_value(f, ['-isystem', '%s/usr/include/c++/v1' % sys_root])
 
             self.env.append_value(f, ['-DDM_PLATFORM_IOS'])
             if 'x86_64' == build_util.get_target_architecture():
@@ -448,14 +452,14 @@ def default_flags(self):
             bp_arch = 'x86_64';
         if bp_os == 'macos':
             bp_os = 'darwin'
-        sysroot='%s/toolchains/llvm/prebuilt/%s-%s/sysroot' % (ANDROID_NDK_ROOT, bp_os, bp_arch)
+        sysroot='%s/toolchains/llvm/prebuilt/%s-%s/sysroot' % (self.sdkinfo['ndk'], bp_os, bp_arch)
 
         for f in ['CFLAGS', 'CXXFLAGS']:
             self.env.append_value(f, ['-g', '-gdwarf-2', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-Wall',
                                       '-fpic', '-ffunction-sections', '-fstack-protector',
                                       '-fomit-frame-pointer', '-fno-strict-aliasing', '-fno-exceptions', '-funwind-tables',
-                                      '-I%s/sources/android/native_app_glue' % (ANDROID_NDK_ROOT),
-                                      '-I%s/sources/android/cpufeatures' % (ANDROID_NDK_ROOT),
+                                      '-I%s/sources/android/native_app_glue' % (self.sdkinfo['ndk']),
+                                      '-I%s/sources/android/cpufeatures' % (self.sdkinfo['ndk']),
                                       '-isysroot=%s' % sysroot,
                                       '-DANDROID', '-Wa,--noexecstack'] + getAndroidCompileFlags(target_arch))
             if f == 'CXXFLAGS':
@@ -469,33 +473,61 @@ def default_flags(self):
                 '-static-libstdc++'] + getAndroidLinkFlags(target_arch))
     elif 'web' == build_util.get_target_os():
 
-        emflags = ['DISABLE_EXCEPTION_CATCHING=1', 'AGGRESSIVE_VARIABLE_ELIMINATION=1', 'PRECISE_F32=2',
-                   'EXTRA_EXPORTED_RUNTIME_METHODS=["stringToUTF8","ccall","stackTrace","UTF8ToString","callMain"]',
-                   'ERROR_ON_UNDEFINED_SYMBOLS=1', 'INITIAL_MEMORY=33554432', 'LLD_REPORT_UNDEFINED', 'MAX_WEBGL_VERSION=2',
-                   'GL_SUPPORT_AUTOMATIC_ENABLE_EXTENSIONS=0']
+        emflags_compile = ['DISABLE_EXCEPTION_CATCHING=1']
+
+        emflags_compile = zip(['-s'] * len(emflags_compile), emflags_compile)
+        emflags_compile =[j for i in emflags_compile for j in i]
+
+        emflags_link = [
+            'DISABLE_EXCEPTION_CATCHING=1',
+            'EXPORTED_RUNTIME_METHODS=["ccall","stackTrace","UTF8ToString","callMain","HEAPU8","stringToNewUTF8"]',
+            'EXPORTED_FUNCTIONS=_main,_malloc,_free',
+            'ERROR_ON_UNDEFINED_SYMBOLS=1',
+            'INITIAL_MEMORY=33554432',
+            'MAX_WEBGL_VERSION=2',
+            'GL_SUPPORT_AUTOMATIC_ENABLE_EXTENSIONS=0',
+            'IMPORTED_MEMORY=1',
+            'STACK_SIZE=5MB',
+            'MIN_FIREFOX_VERSION=34',
+            'MIN_SAFARI_VERSION=90000',
+            'MIN_CHROME_VERSION=32']
+
+        if Options.options.with_webgpu and platform_supports_feature(build_util.get_target_platform(), 'webgpu', {}):
+            emflags_link += ['USE_WEBGPU', 'GL_WORKAROUND_SAFARI_GETCONTEXT_BUG=0']
+            # This is needed so long as we have to use sleep to make initialization
+            emflags_link += ['ASYNCIFY']
+            if int(opt_level) >= 3:
+                emflags_link += ['ASYNCIFY_ADVISE', 'ASYNCIFY_IGNORE_INDIRECT', 'ASYNCIFY_ADD=["main", "dmEngineCreate(int, char**)"]' ]
 
         if 'wasm' == build_util.get_target_architecture():
-            emflags += ['WASM=1', 'IMPORTED_MEMORY=1', 'ALLOW_MEMORY_GROWTH=1']
+            emflags_link += ['WASM=1', 'ALLOW_MEMORY_GROWTH=1']
         else:
-            emflags += ['WASM=0', 'LEGACY_VM_SUPPORT=1']
+            emflags_link += ['WASM=0', 'LEGACY_VM_SUPPORT=1']
 
-        emflags = zip(['-s'] * len(emflags), emflags)
-        emflags =[j for i in emflags for j in i]
+        emflags_link = zip(['-s'] * len(emflags_link), emflags_link)
+        emflags_link =[j for i in emflags_link for j in i]
 
         flags = []
         linkflags = []
         if int(opt_level) < 2:
-            flags = ['-g4']
-            linkflags = ['-g4']
+            flags = ['-gseparate-dwarf', '-gsource-map']
+            linkflags = ['-gseparate-dwarf', '-gsource-map']
+        flags += ['-O%s' % opt_level]
+        linkflags += ['-O%s' % opt_level]
+
+        self.env['DM_HOSTFS']           = '/node_vfs/'
+        self.env.append_value('DEFINES', ['DM_NO_THREAD_SUPPORT', 'JC_TEST_NO_DEATH_TEST'])
+        # This disables a few tests in test_httpclient (no real investigation done)
+        self.env.append_value('DEFINES', ['DM_TEST_DLIB_HTTPCLIENT_NO_HOST_SERVER'])
 
         for f in ['CFLAGS', 'CXXFLAGS']:
             self.env.append_value(f, ['-Wall', '-fPIC', '-fno-exceptions', '-fno-rtti',
-                                        '-DGL_ES_VERSION_2_0', '-DGOOGLE_PROTOBUF_NO_RTTI', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-DDM_NO_SYSTEM_FUNCTION'])
-            self.env.append_value(f, emflags)
+                                      '-DGL_ES_VERSION_2_0', '-DGOOGLE_PROTOBUF_NO_RTTI', '-D__STDC_LIMIT_MACROS', '-DDDF_EXPOSE_DESCRIPTORS', '-DDM_NO_SYSTEM_FUNCTION'])
+            self.env.append_value(f, emflags_compile)
             self.env.append_value(f, flags)
 
-        self.env.append_value('LINKFLAGS', ['-Wno-warn-absolute-paths', '--emit-symbol-map', '--memory-init-file', '0', '-lidbfs.js'])
-        self.env.append_value('LINKFLAGS', emflags)
+        self.env.append_value('LINKFLAGS', ['-Wno-warn-absolute-paths', '--emit-symbol-map', '-lidbfs.js'])
+        self.env.append_value('LINKFLAGS', emflags_link)
         self.env.append_value('LINKFLAGS', linkflags)
 
     elif build_util.get_target_platform() in ['win32', 'x86_64-win32']:
@@ -550,15 +582,11 @@ def web_exported_functions(self):
 
     for name in ('CFLAGS', 'CXXFLAGS', 'LINKFLAGS'):
         arr = self.env[name]
-
-        for i, v in enumerate(arr):
-            if v.startswith('EXPORTED_FUNCTIONS'):
-                remove_flag_at_index(arr, i-1, 2) # "_main" is exported by default
-                break
-
-        if use_crash:
-            self.env.append_value(name, ['-s', 'EXPORTED_FUNCTIONS=["_JSWriteDump","_dmExportedSymbols","_main"]'])
-
+        if use_crash and name in 'LINKFLAGS':
+            for i, v in enumerate(arr):
+                if v.startswith('EXPORTED_FUNCTIONS'):
+                    arr[i] = v + ",_JSWriteDump,_dmExportedSymbols"
+                    break
 
 @feature('cprogram', 'cxxprogram', 'cstlib', 'cxxstlib', 'cshlib')
 @after('apply_obj_vars')
@@ -885,11 +913,22 @@ def _strip_executable(bld, platform, target_arch, path):
     if platform not in ['x86_64-linux','x86_64-macos','arm64-macos','arm64-ios','armv7-android','arm64-android']:
         return 0 # return ok, path is still unstripped
 
+    sdkinfo = sdk.get_sdk_info(SDK_ROOT, bld.env.PLATFORM)
     strip = "strip"
     if 'android' in platform:
-        HOME = os.environ['USERPROFILE' if sys.platform == 'win32' else 'HOME']
-        ANDROID_HOST = 'linux' if sys.platform == 'linux' else 'darwin'
-        strip = "%s/toolchains/llvm/prebuilt/%s-x86_64/bin/llvm-strip" % (ANDROID_NDK_ROOT, ANDROID_HOST)
+        host_names = {
+            'win32': 'windows',
+            'darwin': 'darwin',
+            'linux': 'linux',
+        }
+        home_names = {
+            'win32': 'USERPROFILE',
+            'darwin': 'HOME',
+            'linux': 'HOME',
+        }
+        HOME = os.environ[home_names.get(sys.platform)]
+        ANDROID_HOST = host_names.get(sys.platform)
+        strip = "%s/toolchains/llvm/prebuilt/%s-x86_64/bin/llvm-strip" % (sdkinfo['ndk'], ANDROID_HOST)
 
     return bld.exec_command("%s %s" % (strip, path))
 
@@ -1005,9 +1044,10 @@ def android_package(task):
     except BuildUtilityException as ex:
         task.fatal(ex.msg)
 
-    d8 = '%s/android-sdk/build-tools/%s/d8' % (ANDROID_ROOT, ANDROID_BUILD_TOOLS_VERSION)
+    sdk_info = sdk.get_sdk_info(SDK_ROOT, build_util.get_target_platform())
+    android_jar = sdk_info['jar'] # android.jar from the sdk
+
     dynamo_home = task.env['DYNAMO_HOME']
-    android_jar = '%s/ext/share/java/android.jar' % (dynamo_home)
 
     dex_dir = os.path.dirname(task.classes_dex.abspath())
     root = os.path.normpath(dex_dir)
@@ -1036,7 +1076,7 @@ def android_package(task):
 
     if getattr(task, 'proguard', None):
         proguardtxt = task.proguard[0]
-        proguardjar = '%s/android-sdk/tools/proguard/lib/proguard.jar' % ANDROID_ROOT
+        proguardjar = '%s/android-sdk/tools/proguard/lib/proguard.jar' % sdkinfo['path']
         dex_input = ['%s/share/java/classes.jar' % dynamo_home]
 
         ret = bld.exec_command('%s -jar %s -include %s -libraryjars %s -injars %s -outjar %s' % (task.env['JAVA'][0], proguardjar, proguardtxt, android_jar, ':'.join(dx_jars), dex_input[0]))
@@ -1047,7 +1087,7 @@ def android_package(task):
         dex_input = dx_jars
 
     if dex_input:
-        ret = bld.exec_command('%s --output %s %s' % (d8, dex_dir, ' '.join(dex_input)))
+        ret = bld.exec_command('%s --output %s %s' % (task.env.D8[0], dex_dir, ' '.join(dex_input)))
         if ret != 0:
             error('Error running d8')
             return 1
@@ -1198,7 +1238,7 @@ unsigned char DM_ALIGNED(16) %s[] =
 
     return 0
 
-Task.task_factory('dex', '${DX} --dex --output ${TGT} ${SRC}',
+Task.task_factory('dex', '${D8} --dex --output ${TGT} ${SRC}',
                       color='YELLOW',
                       after='jar_files',
                       shell=True)
@@ -1399,7 +1439,8 @@ def run_tests(ctx, valgrind = False, configfile = None):
             cmd = launch_pattern % (program, configfile if configfile else '')
 
             if 'web' in ctx.env.PLATFORM: # should be moved to TEST_LAUNCH_ARGS
-                cmd = '%s %s' % (ctx.env['NODEJS'], cmd)
+                cmd = '%s %s' % (ctx.env['NODEJS'][0], cmd)
+
         # disable shortly during beta release, due to issue with jctest + test_gui
         valgrind = False
         if valgrind:
@@ -1424,18 +1465,26 @@ def js_web_link_flags(self):
     platform = self.env['PLATFORM']
     if 'web' in platform and 'test' in self.features:
         pre_js = os.path.join(self.env['DYNAMO_HOME'], 'share', "js-web-pre.js")
-        self.env.append_value('LINKFLAGS', ['--pre-js', pre_js])
+        self.env.append_value('LINKFLAGS', ['--pre-js', pre_js, '-lnodefs.js'])
+
+@task_gen
+@after('apply_obj_vars')
+@feature('test')
+def test_no_install(self):
+    if 'test_install' in self.features:
+        return # the user wanted it installed
+    self.install_path = None # the tests shouldn't normally be installed
 
 @task_gen
 @before('process_source')
 @feature('test')
 def test_flags(self):
-    self.install_path = None # the tests shouldn't be installed
     # When building tests for the web, we disable emission of emscripten js.mem init files,
     # as the assumption when these are loaded is that the cwd will contain these items.
     if 'web' in self.env['PLATFORM']:
         for f in ['CFLAGS', 'CXXFLAGS', 'LINKFLAGS']:
-            self.env.append_value(f, ['--memory-init-file', '0'])
+            if '-gsource-map' in self.env[f]:
+                self.env[f].remove('-gsource-map')
 
 @feature('cprogram', 'cxxprogram')
 @after('apply_obj_vars')
@@ -1495,7 +1544,9 @@ def remove_flag(arr, flag, nargs):
         remove_flag_at_index(arr, index, nargs+1)
 
 def detect(conf):
-    conf.find_program('valgrind', var='VALGRIND', mandatory = False)
+    if Options.options.with_valgrind:
+        conf.find_program('valgrind', var='VALGRIND', mandatory = False)
+
     conf.find_program('ccache', var='CCACHE', mandatory = False)
 
     if Options.options.with_iwyu:
@@ -1514,8 +1565,8 @@ def detect(conf):
     if platform in ('x86_64-linux', 'x86_64-win32', 'x86_64-macos', 'arm64-macos'):
         conf.env['IS_TARGET_DESKTOP'] = 'true'
 
-    if platform in ('js-web', 'wasm-web') and not conf.env['NODEJS']:
-        conf.find_program('node', var='NODEJS', mandatory = False)
+    if host_platform in ('x86_64-linux', 'x86_64-win32', 'x86_64-macos', 'arm64-macos'):
+        conf.env['IS_HOST_DESKTOP'] = 'true'
 
     try:
         build_util = create_build_utility(conf.env)
@@ -1525,6 +1576,7 @@ def detect(conf):
     dynamo_home = build_util.get_dynamo_home()
     conf.env['DYNAMO_HOME'] = dynamo_home
 
+    # these may be the same if we're building the host tools
     sdkinfo = sdk.get_sdk_info(SDK_ROOT, build_util.get_target_platform())
     sdkinfo_host = sdk.get_sdk_info(SDK_ROOT, host_platform)
 
@@ -1614,30 +1666,42 @@ def detect(conf):
     elif 'android' == build_util.get_target_os() and build_util.get_target_architecture() in ('armv7', 'arm64'):
         # TODO: No windows support yet (unknown path to compiler when wrote this)
         bp_arch, bp_os = host_platform.split('-')
+        exe_suffix = ''
+        cmd_suffix = ''
         if bp_os == 'macos':
             bp_os = 'darwin'
         elif bp_os == 'win32':
             bp_os = 'windows'
+            cmd_suffix = '.cmd'
+            exe_suffix = '.exe'
         target_arch = build_util.get_target_architecture()
-        api_version = getAndroidNDKAPIVersion(target_arch)
+        api_version = sdkinfo['api']
         clang_name  = getAndroidCompilerName(target_arch, api_version)
         # NDK doesn't support arm64 yet
         if bp_arch == 'arm64':
             bp_arch = 'x86_64';
-        bintools    = '%s/toolchains/llvm/prebuilt/%s-%s/bin' % (ANDROID_NDK_ROOT, bp_os, bp_arch)
-        tool_name = "llvm"
+        bintools    = '%s/toolchains/llvm/prebuilt/%s-%s/bin' % (sdkinfo['ndk'], bp_os, bp_arch)
+        bintools    = os.path.normpath(bintools)
+        sep         = os.path.sep
 
         if not os.path.exists(bintools):
             conf.fatal("Path does not exist: %s" % bintools)
 
-        conf.env['CC']       = '%s/%s' % (bintools, clang_name)
-        conf.env['CXX']      = '%s/%s++' % (bintools, clang_name)
-        conf.env['LINK_CXX'] = '%s/%s++' % (bintools, clang_name)
-        conf.env['CPP']      = '%s/%s -E' % (bintools, clang_name)
-        conf.env['AR']       = '%s/%s-ar' % (bintools, tool_name)
-        conf.env['RANLIB']   = '%s/%s-ranlib' % (bintools, tool_name)
-        conf.env['LD']       = '%s/lld' % (bintools)
-        conf.env['DX']       = '%s/android-sdk/build-tools/%s/dx' % (ANDROID_ROOT, ANDROID_BUILD_TOOLS_VERSION)
+        conf.env['ANDROID_JAR'] = sdkinfo['jar']
+
+        conf.env['CC']       = f'{bintools}{sep}{clang_name}{cmd_suffix}'
+        conf.env['CXX']      = f'{bintools}{sep}{clang_name}++{cmd_suffix}'
+        conf.env['LINK_CXX'] = f'{bintools}{sep}{clang_name}++{cmd_suffix}'
+        conf.env['CPP']      = f'{bintools}{sep}{clang_name}{cmd_suffix} -E'
+
+        conf.env['AR']       = f'{bintools}{sep}llvm-ar{exe_suffix}'
+        conf.env['RANLIB']   = f'{bintools}{sep}llvm-ranlib{exe_suffix}'
+        conf.env['LD']       = f'{bintools}{sep}lld{exe_suffix}'
+
+        # Make sure the the compiler_c/compiler_cxx uses the correct path
+        conf.environ['PATH'] = os.path.normpath(bintools) + os.pathsep + conf.environ['PATH']
+
+        conf.find_program('d8', var='D8', mandatory = True, path_list=[sdkinfo['build_tools']])
 
     elif 'linux' == build_util.get_target_os():
         bin_dir=os.path.join(sdk.get_toolchain_root(sdkinfo, build_util.get_target_platform()),'bin')
@@ -1696,20 +1760,44 @@ def detect(conf):
     remove_flag(conf.env['shlib_CXXFLAGS'], '-compatibility_version', 1)
     remove_flag(conf.env['shlib_CXXFLAGS'], '-current_version', 1)
 
+    # Needed for api generation
+    if conf.env.IS_HOST_DESKTOP:
+        if not 'CLANG' in conf.env:
+            conf.find_program('clang',   var='CLANG', mandatory = True)
+            os.environ['CLANG'] = conf.env.CLANG[0]
+        if not 'CLANGPP' in conf.env:
+            conf.find_program('clang++', var='CLANGPP', mandatory = True)
+            os.environ['CLANGPP'] = conf.env.CLANGPP[0]
+
     # NOTE: We override after check_tool. Otherwise waf gets confused and CXX_NAME etc are missing..
     if platform in ('js-web', 'wasm-web'):
-        bin = os.environ.get('EMSCRIPTEN')
-        if None == bin:
-            conf.fatal('EMSCRIPTEN environment variable does not exist')
-        conf.env['EMSCRIPTEN'] = bin
-        conf.env['CC'] = '%s/emcc' % (bin)
-        conf.env['CXX'] = '%s/em++' % (bin)
-        conf.env['LINK_CC'] = '%s/emcc' % (bin)
-        conf.env['LINK_CXX'] = '%s/em++' % (bin)
-        conf.env['CPP'] = '%s/em++' % (bin)
-        conf.env['AR'] = '%s/emar' % (bin)
-        conf.env['RANLIB'] = '%s/emranlib' % (bin)
-        conf.env['LD'] = '%s/emcc' % (bin)
+        emsdk = sdkinfo['emsdk']['path']
+
+        if emsdk is None:
+            conf.fatal('EMSDK environment variable not found.')
+
+        if not conf.env['NODEJS']:
+            emsdk_node = sdkinfo['emsdk']['node']
+            path_list = None
+            if emsdk_node is not None and os.path.exists(emsdk_node):
+                path_list = [os.path.dirname(emsdk_node)]
+            conf.find_program('node', var='NODEJS', mandatory = False, path_list = path_list)
+
+        bin_dir = os.path.join(emsdk, 'upstream', 'emscripten')
+
+        conf.env['EMSCRIPTEN'] = bin_dir
+        conf.env['EMSDK'] = emsdk # let's use the actual install dir if we wish to use other tools
+        conf.env['EM_CACHE'] = sdkinfo['emsdk']['cache']
+        conf.env['EM_CONFIG'] = sdkinfo['emsdk']['config']
+
+        conf.env['CC'] = f'{bin_dir}/emcc'
+        conf.env['CXX'] = f'{bin_dir}/em++'
+        conf.env['LINK_CC'] = f'{bin_dir}/emcc'
+        conf.env['LINK_CXX'] = f'{bin_dir}/em++'
+        conf.env['CPP'] = f'{bin_dir}/em++'
+        conf.env['AR'] = f'{bin_dir}/emar'
+        conf.env['RANLIB'] = f'{bin_dir}/emranlib'
+        conf.env['LD'] = f'{bin_dir}/emcc'
         conf.env['cprogram_PATTERN']='%s.js'
         conf.env['cxxprogram_PATTERN']='%s.js'
 
@@ -1799,7 +1887,7 @@ def detect(conf):
     elif platform in ('x86_64-linux',):
         conf.env['LIB_OPENAL'] = ['openal']
 
-    conf.env['STLIB_DLIB'] = ['dlib', 'mbedtls', 'zip']
+    conf.env['STLIB_DLIB'] = ['dlib', 'image', 'mbedtls', 'zip']
     conf.env['STLIB_DDF'] = 'ddf'
     conf.env['STLIB_CRASH'] = 'crashext'
     conf.env['STLIB_CRASH_NULL'] = 'crashext_null'
@@ -1824,17 +1912,23 @@ def detect(conf):
 
     conf.env['STLIB_GRAPHICS']          = ['graphics', 'graphics_transcoder_basisu', 'basis_transcoder']
     conf.env['STLIB_GRAPHICS_VULKAN']   = ['graphics_vulkan', 'graphics_transcoder_basisu', 'basis_transcoder']
+    conf.env['STLIB_GRAPHICS_WEBGPU']   = ['graphics_webgpu', 'graphics_transcoder_basisu', 'basis_transcoder']
     conf.env['STLIB_GRAPHICS_NULL']     = ['graphics_null', 'graphics_transcoder_null']
 
-    conf.env['STLIB_PLATFORM']      = ['platform']
-    conf.env['STLIB_PLATFORM_NULL'] = ['platform_null']
+    conf.env['STLIB_PLATFORM']        = ['platform']
+    conf.env['STLIB_PLATFORM_VULKAN'] = ['platform_vulkan']
+    conf.env['STLIB_PLATFORM_NULL']   = ['platform_null']
 
-    conf.env['STLIB_DMGLFW'] = 'dmglfw'
+    if platform_glfw_version(platform) == 3:
+        conf.env['STLIB_DMGLFW'] = 'glfw3'
+    else:
+        conf.env['STLIB_DMGLFW'] = 'dmglfw'
 
     if platform in ('x86_64-macos','arm64-macos'):
         conf.env['STLIB_VULKAN'] = Options.options.with_vulkan_validation and 'vulkan' or 'MoltenVK'
         conf.env['FRAMEWORK_VULKAN'] = ['Metal', 'IOSurface', 'QuartzCore']
         conf.env['FRAMEWORK_DMGLFW'] = ['QuartzCore']
+
     elif platform in ('arm64-ios','x86_64-ios'):
         conf.env['STLIB_VULKAN'] = 'MoltenVK'
         conf.env['FRAMEWORK_VULKAN'] = ['Metal', 'IOSurface']
@@ -1881,8 +1975,17 @@ def detect(conf):
             conf.env['LIBPATH_JDK'] = os.path.join(os.environ['JAVA_HOME'], 'lib')
             conf.env['DEFINES_JDK'] = ['DM_HAS_JDK']
 
-            conf.env['LIB_JNI'] = ['jni']
-            conf.env['LIB_JNI_NOASAN'] = ['jni_noasan']
+            # if the jdk doesn't have the jni.h
+            jni_path = os.path.join(conf.env['INCLUDES_JDK'][0], 'jni.h')
+            if not os.path.exists(jni_path):
+                Logs.error("JAVA_HOME=%s" % os.environ['JAVA_HOME'])
+                Logs.error("Failed to find jni.h at %s" % jni_path)
+                sys.exit(1)
+
+    conf.load('waf_csharp')
+
+    if Options.options.generate_compile_commands:
+        conf.load('clang_compilation_database')
 
 
 def configure(conf):
@@ -1904,6 +2007,7 @@ def options(opt):
     opt.add_option('--skip-codesign', action="store_true", default=False, dest='skip_codesign', help='skip code signing')
     opt.add_option('--skip-apidocs', action='store_true', default=False, dest='skip_apidocs', help='skip extraction and generation of API docs.')
     opt.add_option('--disable-ccache', action="store_true", default=False, dest='disable_ccache', help='force disable of ccache')
+    opt.add_option('--generate-compile-commands', action="store_true", default=False, dest='generate_compile_commands', help='generate (appending mode) compile_commands.json')
     opt.add_option('--use-vanilla-lua', action="store_true", default=False, dest='use_vanilla_lua', help='use luajit')
     opt.add_option('--disable-feature', action='append', default=[], dest='disable_features', help='disable feature, --disable-feature=foo')
     opt.add_option('--opt-level', default="2", dest='opt_level', help='optimization level')
@@ -1917,3 +2021,4 @@ def options(opt):
     opt.add_option('--with-valgrind', action='store_true', default=False, dest='with_valgrind', help='Enables usage of valgrind')
     opt.add_option('--with-vulkan', action='store_true', default=False, dest='with_vulkan', help='Enables Vulkan as graphics backend')
     opt.add_option('--with-vulkan-validation', action='store_true', default=False, dest='with_vulkan_validation', help='Enables Vulkan validation layers (on osx and ios)')
+    opt.add_option('--with-webgpu', action='store_true', default=False, dest='with_webgpu', help='Enables WebGPU as graphics backend')

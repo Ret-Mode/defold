@@ -22,9 +22,11 @@
 #include <string.h>
 #include <assert.h>
 #include <dlib/profile.h>
+#include <dlib/math.h>
 
 DM_PROPERTY_GROUP(rmtp_Graphics, "Graphics");
 DM_PROPERTY_U32(rmtp_DrawCalls, 0, FrameReset, "# vertices", &rmtp_Graphics);
+DM_PROPERTY_U32(rmtp_DispatchCalls, 0, FrameReset, "# dispatches", &rmtp_Graphics);
 
 #include <dlib/log.h>
 #include <dlib/dstrings.h>
@@ -35,11 +37,16 @@ namespace dmGraphics
     static GraphicsAdapter*             g_adapter = 0;
     static GraphicsAdapterFunctionTable g_functions;
 
-    void RegisterGraphicsAdapter(GraphicsAdapter* adapter, GraphicsAdapterIsSupportedCb is_supported_cb, GraphicsAdapterRegisterFunctionsCb register_functions_cb, int8_t priority)
+    void RegisterGraphicsAdapter(GraphicsAdapter* adapter,
+        GraphicsAdapterIsSupportedCb              is_supported_cb,
+        GraphicsAdapterRegisterFunctionsCb        register_functions_cb,
+        GraphicsAdapterGetContextCb               get_context_cb,
+        int8_t                                    priority)
     {
         adapter->m_Next          = g_adapter_list;
         adapter->m_IsSupportedCb = is_supported_cb;
         adapter->m_RegisterCb    = register_functions_cb;
+        adapter->m_GetContextCb  = get_context_cb;
         adapter->m_Priority      = priority;
         g_adapter_list           = adapter;
     }
@@ -72,7 +79,8 @@ namespace dmGraphics
 
         while(next)
         {
-            if (next->m_Priority < selected->m_Priority && next->m_IsSupportedCb())
+            bool is_supported = next->m_IsSupportedCb();
+            if (next->m_Priority < selected->m_Priority && is_supported)
             {
                 selected = next;
             }
@@ -100,6 +108,8 @@ namespace dmGraphics
             return ADAPTER_FAMILY_OPENGL;
         if (dmStrCaseCmp("vulkan", adapter_name) == 0)
             return ADAPTER_FAMILY_VULKAN;
+        if (dmStrCaseCmp("webgpu", adapter_name) == 0)
+            return ADAPTER_FAMILY_WEBGPU;
         if (dmStrCaseCmp("vendor", adapter_name) == 0)
             return ADAPTER_FAMILY_VENDOR;
         assert(0 && "Adapter type not supported?");
@@ -117,6 +127,7 @@ namespace dmGraphics
             GRAPHICS_ENUM_TO_STR_CASE(ADAPTER_FAMILY_OPENGL);
             GRAPHICS_ENUM_TO_STR_CASE(ADAPTER_FAMILY_VULKAN);
             GRAPHICS_ENUM_TO_STR_CASE(ADAPTER_FAMILY_VENDOR);
+            GRAPHICS_ENUM_TO_STR_CASE(ADAPTER_FAMILY_WEBGPU);
             default:break;
         }
         return "<unknown dmGraphics::AdapterFamily>";
@@ -129,6 +140,7 @@ namespace dmGraphics
             GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_TYPE_2D);
             GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_TYPE_2D_ARRAY);
             GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_TYPE_CUBE_MAP);
+            GRAPHICS_ENUM_TO_STR_CASE(TEXTURE_TYPE_IMAGE_2D);
             default:break;
         }
         return "<unknown dmGraphics::TextureType>";
@@ -236,8 +248,11 @@ namespace dmGraphics
             SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_GLSL_SM140);
             SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_GLES_SM100);
             SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_GLES_SM300);
+            SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_GLSL_SM430);
+            SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_GLSL_SM330);
             SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_SPIRV);
             SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_PSSL);
+            SHADERDESC_ENUM_TO_STR_CASE(LANGUAGE_WGSL);
             default:break;
         }
         return "<unknown ShaderDesc::Language>";
@@ -246,15 +261,11 @@ namespace dmGraphics
     #undef SHADERDESC_ENUM_TO_STR_CASE
 
     ContextParams::ContextParams()
-    : m_JobThread(0)
-    , m_DefaultTextureMinFilter(TEXTURE_FILTER_LINEAR_MIPMAP_NEAREST)
-    , m_DefaultTextureMagFilter(TEXTURE_FILTER_LINEAR)
-    , m_GraphicsMemorySize(0)
-    , m_VerifyGraphicsCalls(false)
-    , m_RenderDocSupport(0)
-    , m_UseValidationLayers(0)
     {
-
+        memset(this, 0x0, sizeof(*this));
+        m_DefaultTextureMinFilter = TEXTURE_FILTER_LINEAR_MIPMAP_NEAREST;
+        m_DefaultTextureMagFilter = TEXTURE_FILTER_LINEAR;
+        m_SwapInterval            = 1;
     }
 
     AttachmentToBufferType::AttachmentToBufferType()
@@ -270,6 +281,11 @@ namespace dmGraphics
         return g_functions.m_NewContext(params);
     }
 
+    HContext GetInstalledContext()
+    {
+        assert(g_adapter && "No graphics adapter installed");
+        return g_adapter->m_GetContextCb();
+    }
 
     static inline BufferType GetAttachmentBufferType(RenderTargetAttachment attachment)
     {
@@ -286,13 +302,12 @@ namespace dmGraphics
     ShaderDesc::Shader* GetShaderProgram(HContext context, ShaderDesc* shader_desc)
     {
         assert(shader_desc);
-        ShaderDesc::Language language = GetShaderProgramLanguage(context, shader_desc->m_ShaderClass);
         ShaderDesc::Shader* selected_shader = 0x0;
 
         for(uint32_t i = 0; i < shader_desc->m_Shaders.m_Count; ++i)
         {
             ShaderDesc::Shader* shader = &shader_desc->m_Shaders.m_Data[i];
-            if(shader->m_Language == language)
+            if(IsShaderLanguageSupported(context, shader->m_Language, shader_desc->m_ShaderType))
             {
                 if (shader->m_VariantTextureArray)
                 {
@@ -311,14 +326,7 @@ namespace dmGraphics
 
         if (selected_shader == 0)
         {
-            const char* error_hint = "";
-            if (language == ShaderDesc::LANGUAGE_SPIRV)
-            {
-                error_hint = "Has the project been built with spir-v output enabled?";
-            }
-
-            dmLogError("Unable to get a valid shader with shader language \"%s\" from a ShaderDesc for this context. %s",
-                GetShaderProgramLanguageLiteral(language), error_hint);
+            dmLogError("Unable to get a valid shader from a ShaderDesc for this context.");
         }
 
         return selected_shader;
@@ -337,6 +345,21 @@ namespace dmGraphics
             default: break;
         }
         return ~0u;
+    }
+
+    BufferType GetBufferTypeFromIndex(uint32_t index)
+    {
+        switch(index)
+        {
+            case 0: return BUFFER_TYPE_COLOR0_BIT;
+            case 1: return BUFFER_TYPE_COLOR1_BIT;
+            case 2: return BUFFER_TYPE_COLOR2_BIT;
+            case 3: return BUFFER_TYPE_COLOR3_BIT;
+            case 4: return BUFFER_TYPE_DEPTH_BIT;
+            case 5: return BUFFER_TYPE_STENCIL_BIT;
+            default: break;
+        }
+        return (BufferType) ~0u;
     }
 
     uint32_t GetTypeSize(dmGraphics::Type type)
@@ -377,15 +400,6 @@ namespace dmGraphics
         {
             return 4 * 4 * 4;
         }
-        else if (type == TYPE_SAMPLER_2D ||
-                 type == TYPE_SAMPLER_CUBE ||
-                 type == TYPE_SAMPLER_2D_ARRAY ||
-                 type == TYPE_IMAGE_2D)
-        {
-            return 0;
-        }
-
-        assert(0 && "Invalid/unsupported type");
         return 0;
     }
 
@@ -408,65 +422,6 @@ namespace dmGraphics
             default: break;
         }
         return 0;
-    }
-
-    void GetAttributeValues(const dmGraphics::VertexAttribute& attribute, const uint8_t** data_ptr, uint32_t* data_size)
-    {
-        *data_ptr  = attribute.m_Values.m_BinaryValues.m_Data;
-        *data_size = attribute.m_Values.m_BinaryValues.m_Count;
-    }
-
-    uint8_t* WriteAttribute(const VertexAttributeInfos* attribute_infos, uint8_t* write_ptr, uint32_t vertex_index, const dmVMath::Matrix4* world_transform, const dmVMath::Point3& p, const dmVMath::Point3& p_local, const dmVMath::Vector4& color, float** uvs, uint32_t* page_indices, uint32_t num_textures)
-    {
-        uint32_t num_texcoords = 0;
-        uint32_t num_page_indices = 0;
-
-        for (int i = 0; i < attribute_infos->m_NumInfos; ++i)
-        {
-            const VertexAttributeInfo& info = attribute_infos->m_Infos[i];
-
-            switch(info.m_SemanticType)
-            {
-                case dmGraphics::VertexAttribute::SEMANTIC_TYPE_POSITION:
-                {
-                    if (info.m_CoordinateSpace == dmGraphics::COORDINATE_SPACE_WORLD && world_transform)
-                    {
-                        dmVMath::Vector4 wp = *world_transform * p;
-                        memcpy(write_ptr, &wp, info.m_ValueByteSize);
-                    }
-                    else
-                    {
-                        memcpy(write_ptr, &p_local, info.m_ValueByteSize);
-                    }
-                } break;
-                case dmGraphics::VertexAttribute::SEMANTIC_TYPE_TEXCOORD:
-                {
-                    uint32_t unit = num_texcoords++;
-                    if (unit >= num_textures)
-                        unit = 0;
-                    memcpy(write_ptr, uvs[unit] + vertex_index * 2, info.m_ValueByteSize);
-                } break;
-                case dmGraphics::VertexAttribute::SEMANTIC_TYPE_COLOR:
-                {
-                    memcpy(write_ptr, &color, info.m_ValueByteSize);
-                } break;
-                case dmGraphics::VertexAttribute::SEMANTIC_TYPE_PAGE_INDEX:
-                {
-                    uint32_t unit = num_page_indices++;
-                    float page_index = (float) page_indices[unit];
-                    memcpy(write_ptr, &page_index, info.m_ValueByteSize);
-                } break;
-                default:
-                {
-                    assert(info.m_ValuePtr);
-                    memcpy(write_ptr, info.m_ValuePtr, info.m_ValueByteSize);
-                } break;
-            }
-
-            write_ptr += info.m_ValueByteSize;
-        }
-
-        return write_ptr;
     }
 
     dmGraphics::Type GetGraphicsType(dmGraphics::VertexAttribute::DataType data_type)
@@ -498,10 +453,14 @@ namespace dmGraphics
             case ShaderDesc::SHADER_TYPE_MAT2:            return TYPE_FLOAT_MAT2;
             case ShaderDesc::SHADER_TYPE_MAT3:            return TYPE_FLOAT_MAT3;
             case ShaderDesc::SHADER_TYPE_MAT4:            return TYPE_FLOAT_MAT4;
+            case ShaderDesc::SHADER_TYPE_SAMPLER:         return TYPE_SAMPLER;
             case ShaderDesc::SHADER_TYPE_SAMPLER2D:       return TYPE_SAMPLER_2D;
             case ShaderDesc::SHADER_TYPE_SAMPLER_CUBE:    return TYPE_SAMPLER_CUBE;
             case ShaderDesc::SHADER_TYPE_SAMPLER2D_ARRAY: return TYPE_SAMPLER_2D_ARRAY;
             case ShaderDesc::SHADER_TYPE_IMAGE2D:         return TYPE_IMAGE_2D;
+            case ShaderDesc::SHADER_TYPE_TEXTURE2D:       return TYPE_TEXTURE_2D;
+            case ShaderDesc::SHADER_TYPE_TEXTURE2D_ARRAY: return TYPE_TEXTURE_2D_ARRAY;
+            case ShaderDesc::SHADER_TYPE_TEXTURE_CUBE:    return TYPE_TEXTURE_CUBE;
             default: break;
         }
 
@@ -513,6 +472,13 @@ namespace dmGraphics
     {
         VertexStreamDeclaration* sd = new VertexStreamDeclaration();
         memset(sd, 0, sizeof(*sd));
+        return sd;
+    }
+
+    HVertexStreamDeclaration NewVertexStreamDeclaration(HContext context, VertexStepFunction step_function)
+    {
+        VertexStreamDeclaration* sd = NewVertexStreamDeclaration(context);
+        sd->m_StepFunction = step_function;
         return sd;
     }
 
@@ -579,7 +545,12 @@ namespace dmGraphics
 
     uint32_t GetVertexDeclarationStride(HVertexDeclaration vertex_declaration)
     {
-        return vertex_declaration->m_Stride;
+        return vertex_declaration ? vertex_declaration->m_Stride : 0;
+    }
+
+    uint32_t GetVertexDeclarationStreamCount(HVertexDeclaration vertex_declaration)
+    {
+        return vertex_declaration ? vertex_declaration->m_StreamCount : 0;
     }
 
     #define DM_TEXTURE_FORMAT_TO_STR_CASE(x) case TEXTURE_FORMAT_##x: return #x;
@@ -946,9 +917,13 @@ namespace dmGraphics
             res.m_NameHash             = bindings[i].m_NameHash;
             res.m_Binding              = bindings[i].m_Binding;
             res.m_Set                  = bindings[i].m_Set;
-            res.m_BlockSize            = bindings[i].m_BlockSize;
             res.m_Type.m_UseTypeIndex  = bindings[i].m_Type.m_UseTypeIndex;
             res.m_BindingFamily        = family;
+
+            if (res.m_Type.m_ShaderType == ShaderDesc::SHADER_TYPE_SAMPLER)
+                res.m_BindingInfo.m_SamplerTextureIndex = bindings[i].m_Bindinginfo.m_SamplerTextureIndex;
+            else
+                res.m_BindingInfo.m_BlockSize = bindings[i].m_Bindinginfo.m_BlockSize;
 
             if (res.m_Type.m_UseTypeIndex)
                 res.m_Type.m_TypeIndex = bindings[i].m_Type.m_Type.m_TypeIndex;
@@ -957,7 +932,7 @@ namespace dmGraphics
         }
     }
 
-    void CreateShaderMeta(ShaderDesc::Shader* ddf, ShaderMeta* meta)
+    void CreateShaderMeta(ShaderDesc::ShaderReflection* ddf, ShaderMeta* meta)
     {
         PutShaderResourceBindings(ddf->m_UniformBuffers.m_Data, ddf->m_UniformBuffers.m_Count, meta->m_UniformBuffers, ShaderResourceBinding::BINDING_FAMILY_UNIFORM_BUFFER);
         PutShaderResourceBindings(ddf->m_StorageBuffers.m_Data, ddf->m_StorageBuffers.m_Count, meta->m_StorageBuffers, ShaderResourceBinding::BINDING_FAMILY_STORAGE_BUFFER);
@@ -1067,7 +1042,7 @@ namespace dmGraphics
         }
     }
 
-    uint16_t PushSetTextureAsyncState(SetTextureAsyncState& state, HTexture texture, TextureParams params)
+    uint16_t PushSetTextureAsyncState(SetTextureAsyncState& state, HTexture texture, TextureParams params, SetTextureAsyncCallback callback, void* user_data)
     {
         DM_MUTEX_SCOPED_LOCK(state.m_Mutex);
         if (state.m_Indices.Remaining() == 0)
@@ -1080,11 +1055,14 @@ namespace dmGraphics
         SetTextureAsyncParams& ap  = state.m_Params[param_array_index];
         ap.m_Texture               = texture;
         ap.m_Params                = params;
+        ap.m_Callback              = callback;
+        ap.m_UserData              = user_data;
         return param_array_index;
     }
 
     void PushSetTextureAsyncDeleteTexture(SetTextureAsyncState& state, HTexture texture)
     {
+        DM_MUTEX_SCOPED_LOCK(state.m_Mutex);
         if (state.m_PostDeleteTextures.Full())
         {
             state.m_PostDeleteTextures.OffsetCapacity(64);
@@ -1144,7 +1122,8 @@ namespace dmGraphics
 
     void Finalize()
     {
-        g_functions.m_Finalize();
+        if (g_functions.m_Finalize)
+            g_functions.m_Finalize();
     }
 
     ///////////////////////////////////////////////////
@@ -1239,6 +1218,10 @@ namespace dmGraphics
     {
         g_functions.m_SetVertexBufferSubData(buffer, offset, size, data);
     }
+    uint32_t GetVertexBufferSize(HVertexBuffer buffer)
+    {
+        return g_functions.m_GetVertexBufferSize(buffer);
+    }
     uint32_t GetMaxElementsVertices(HContext context)
     {
         return g_functions.m_GetMaxElementsVertices(context);
@@ -1259,6 +1242,10 @@ namespace dmGraphics
     {
         g_functions.m_SetIndexBufferSubData(buffer, offset, size, data);
     }
+    uint32_t GetIndexBufferSize(HIndexBuffer buffer)
+    {
+        return g_functions.m_GetIndexBufferSize(buffer);
+    }
     bool IsIndexBufferFormatSupported(HContext context, IndexBufferFormat format)
     {
         return g_functions.m_IsIndexBufferFormatSupported(context, format);
@@ -1275,9 +1262,9 @@ namespace dmGraphics
     {
         return g_functions.m_NewVertexDeclarationStride(context, stream_declaration, stride);
     }
-    void EnableVertexDeclaration(HContext context, HVertexDeclaration vertex_declaration, uint32_t binding_index, HProgram program)
+    void EnableVertexDeclaration(HContext context, HVertexDeclaration vertex_declaration, uint32_t binding_index, uint32_t base_offset, HProgram program)
     {
-        g_functions.m_EnableVertexDeclaration(context, vertex_declaration, binding_index, program);
+        g_functions.m_EnableVertexDeclaration(context, vertex_declaration, binding_index, base_offset, program);
     }
     void DisableVertexDeclaration(HContext context, HVertexDeclaration vertex_declaration)
     {
@@ -1291,21 +1278,27 @@ namespace dmGraphics
     {
         g_functions.m_DisableVertexBuffer(context, vertex_buffer);
     }
-    void DrawElements(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count, Type type, HIndexBuffer index_buffer)
+    void DrawElements(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count, Type type, HIndexBuffer index_buffer, uint32_t instance_count)
     {
-        g_functions.m_DrawElements(context, prim_type, first, count, type, index_buffer);
+        g_functions.m_DrawElements(context, prim_type, first, count, type, index_buffer, instance_count);
     }
-    void Draw(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count)
+    void Draw(HContext context, PrimitiveType prim_type, uint32_t first, uint32_t count, uint32_t instance_count)
     {
-        g_functions.m_Draw(context, prim_type, first, count);
+        g_functions.m_Draw(context, prim_type, first, count, instance_count);
     }
-    HVertexProgram NewVertexProgram(HContext context, ShaderDesc::Shader* ddf)
+    void DispatchCompute(HContext context, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
     {
-        return g_functions.m_NewVertexProgram(context, ddf);
+        g_functions.m_DispatchCompute(context, group_count_x, group_count_y, group_count_z);
     }
-    HFragmentProgram NewFragmentProgram(HContext context, ShaderDesc::Shader* ddf)
+    HVertexProgram NewVertexProgram(HContext context, ShaderDesc* ddf, char* error_buffer, uint32_t error_buffer_size)
     {
-        return g_functions.m_NewFragmentProgram(context, ddf);
+        assert(ddf->m_ShaderType == dmGraphics::ShaderDesc::SHADER_TYPE_VERTEX);
+        return g_functions.m_NewVertexProgram(context, ddf, error_buffer, error_buffer_size);
+    }
+    HFragmentProgram NewFragmentProgram(HContext context, ShaderDesc* ddf, char* error_buffer, uint32_t error_buffer_size)
+    {
+        assert(ddf->m_ShaderType == dmGraphics::ShaderDesc::SHADER_TYPE_FRAGMENT);
+        return g_functions.m_NewFragmentProgram(context, ddf, error_buffer, error_buffer_size);
     }
     HProgram NewProgram(HContext context, HVertexProgram vertex_program, HFragmentProgram fragment_program)
     {
@@ -1315,12 +1308,14 @@ namespace dmGraphics
     {
         g_functions.m_DeleteProgram(context, program);
     }
-    bool ReloadVertexProgram(HVertexProgram prog, ShaderDesc::Shader* ddf)
+    bool ReloadVertexProgram(HVertexProgram prog, ShaderDesc* ddf)
     {
+        assert(ddf->m_ShaderType == dmGraphics::ShaderDesc::SHADER_TYPE_VERTEX);
         return g_functions.m_ReloadVertexProgram(prog, ddf);
     }
-    bool ReloadFragmentProgram(HFragmentProgram prog, ShaderDesc::Shader* ddf)
+    bool ReloadFragmentProgram(HFragmentProgram prog, ShaderDesc* ddf)
     {
+        assert(ddf->m_ShaderType == dmGraphics::ShaderDesc::SHADER_TYPE_FRAGMENT);
         return g_functions.m_ReloadFragmentProgram(prog, ddf);
     }
     void DeleteVertexProgram(HVertexProgram prog)
@@ -1335,9 +1330,9 @@ namespace dmGraphics
     {
         return g_functions.m_GetProgramLanguage(program);
     }
-    ShaderDesc::Language GetShaderProgramLanguage(HContext context, ShaderDesc::ShaderClass shader_class)
+    bool IsShaderLanguageSupported(HContext context, ShaderDesc::Language language, ShaderDesc::ShaderType shader_type)
     {
-        return g_functions.m_GetShaderProgramLanguage(context, shader_class);
+        return g_functions.m_IsShaderLanguageSupported(context, language, shader_type);
     }
     void EnableProgram(HContext context, HProgram program)
     {
@@ -1355,8 +1350,9 @@ namespace dmGraphics
     {
         return g_functions.m_ReloadProgramCompute(context, program, compute_program);
     }
-    bool ReloadComputeProgram(HComputeProgram prog, ShaderDesc::Shader* ddf)
+    bool ReloadComputeProgram(HComputeProgram prog, ShaderDesc* ddf)
     {
+        assert(ddf->m_ShaderType == dmGraphics::ShaderDesc::SHADER_TYPE_COMPUTE);
         return g_functions.m_ReloadComputeProgram(prog, ddf);
     }
     uint32_t GetAttributeCount(HProgram prog)
@@ -1495,9 +1491,9 @@ namespace dmGraphics
     {
         g_functions.m_SetTexture(texture, params);
     }
-    void SetTextureAsync(HTexture texture, const TextureParams& paramsa)
+    void SetTextureAsync(HTexture texture, const TextureParams& params, SetTextureAsyncCallback callback, void* user_data)
     {
-        g_functions.m_SetTextureAsync(texture, paramsa);
+        g_functions.m_SetTextureAsync(texture, params, callback, user_data);
     }
     void SetTextureParams(HTexture texture, TextureFilter minfilter, TextureFilter magfilter, TextureWrap uwrap, TextureWrap vwrap, float max_anisotropy)
     {
@@ -1577,6 +1573,11 @@ namespace dmGraphics
     }
     bool IsContextFeatureSupported(HContext context, ContextFeature feature)
     {
+        if (CONTEXT_FEATURE_VSYNC == feature)
+        {
+            AdapterFamily family = GetInstalledAdapterFamily();
+            return !(family == ADAPTER_FAMILY_NULL || family == ADAPTER_FAMILY_NONE);
+        }
         return g_functions.m_IsContextFeatureSupported(context, feature);
     }
     PipelineState GetPipelineState(HContext context)
@@ -1587,14 +1588,19 @@ namespace dmGraphics
     {
         return g_functions.m_GetNumTextureHandles(texture);
     }
+    uint32_t GetTextureUsageHintFlags(HTexture texture)
+    {
+        return g_functions.m_GetTextureUsageHintFlags(texture);
+    }
     bool IsAssetHandleValid(HContext context, HAssetHandle asset_handle)
     {
         assert(asset_handle <= MAX_ASSET_HANDLE_VALUE);
         return g_functions.m_IsAssetHandleValid(context, asset_handle);
     }
-    HComputeProgram NewComputeProgram(HContext context, ShaderDesc::Shader* ddf)
+    HComputeProgram NewComputeProgram(HContext context, ShaderDesc* ddf, char* error_buffer, uint32_t error_buffer_size)
     {
-        return g_functions.m_NewComputeProgram(context, ddf);
+        assert(ddf->m_ShaderType == dmGraphics::ShaderDesc::SHADER_TYPE_COMPUTE);
+        return g_functions.m_NewComputeProgram(context, ddf, error_buffer, error_buffer_size);
     }
     HProgram NewProgram(HContext context, HComputeProgram compute_program)
     {
@@ -1604,25 +1610,6 @@ namespace dmGraphics
     {
         return g_functions.m_DeleteComputeProgram(prog);
     }
-
-#ifdef DM_EXPERIMENTAL_GRAPHICS_FEATURES
-    void* MapVertexBuffer(HContext context, HVertexBuffer buffer, BufferAccess access)
-    {
-        return g_functions.m_MapVertexBuffer(context, buffer, access);
-    }
-    bool UnmapVertexBuffer(HContext context, HVertexBuffer buffer)
-    {
-        return g_functions.m_UnmapVertexBuffer(context, buffer);
-    }
-    void* MapIndexBuffer(HContext context, HIndexBuffer buffer, BufferAccess access)
-    {
-        return g_functions.m_MapIndexBuffer(context, buffer, access);
-    }
-    bool UnmapIndexBuffer(HContext context, HIndexBuffer buffer)
-    {
-        return g_functions.m_UnmapIndexBuffer(context, buffer);
-    }
-#endif
 
 #if defined(DM_PLATFORM_IOS)
     void AppBootstrap(int argc, char** argv, void* init_ctx, EngineInit init_fn, EngineExit exit_fn, EngineCreate create_fn, EngineDestroy destroy_fn, EngineUpdate update_fn, EngineGetResult result_fn)

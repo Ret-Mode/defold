@@ -19,16 +19,16 @@
             [editor.fs :as fs]
             [editor.git-test :as gt]
             [editor.git :as git]
-            [editor.prefs :as prefs]
             [editor.progress :as progress]
             [editor.resource :as resource]
             [editor.sync :as sync]
             [integration.test-util :as test-util]
-            [support.test-support :as test-support])
+            [support.test-support :as test-support]
+            [util.fn :as fn])
   (:import [java.io File]))
 
 (defn- make-prefs []
-  (prefs/make-prefs "unit-test"))
+  (test-util/make-test-prefs))
 
 (deftest find-git-state-test
   (let [base-status {:added #{}
@@ -335,7 +335,7 @@
   (testing "Retryable error"
     (testing "Don't retry"
       (let [cancel-fn (test-util/make-call-logger (constantly {:type :error :can-retry? true}))]
-        (with-redefs [dialogs/make-confirmation-dialog (test-util/make-call-logger (constantly false))]
+        (with-redefs [dialogs/make-confirmation-dialog (test-util/make-call-logger fn/constantly-false)]
           (is (nil? (sync/interactive-cancel! cancel-fn)))
           (is (= 1 (count (test-util/call-logger-calls cancel-fn))))
           (is (= 1 (count (test-util/call-logger-calls dialogs/make-confirmation-dialog)))))))

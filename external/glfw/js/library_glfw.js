@@ -460,6 +460,7 @@ var LibraryGLFW = {
         for (var i = 0; i < GLFW.keys.length; i++) {
           GLFW.keys[i] = 0;
         }
+        GLFW.buttons = 0;
       }
       if (GLFW.focusFunc) {
         {{{ makeDynCall('vi', 'GLFW.focusFunc') }}}(focus);
@@ -581,7 +582,7 @@ var LibraryGLFW = {
                     GLFW.disconnectJoystick(joy);
                   }
                   GLFW.joys[joy] = {
-                    id: allocate(intArrayFromString(gamepad_id), ALLOC_NORMAL),
+                    id: stringToNewUTF8(gamepad_id),
                     id_string: gamepad_id,
                     axesCount: gamepad.axes.length,
                     buttonsCount: gamepad.buttons.length
@@ -732,30 +733,32 @@ var LibraryGLFW = {
       throw "Invalid glfwOpenWindow mode.";
     }
 
-    var contextAttributes = {
-      antialias: (GLFW.params[0x00020013] > 1), // GLFW_FSAA_SAMPLES
-      depth: (GLFW.params[0x00020009] > 0), // GLFW_DEPTH_BITS
-      stencil: (GLFW.params[0x0002000A] > 0) // GLFW_STENCIL_BITS
-    };
+    var useWebGL = GLFW.params[0x0002001A] > 0; // Use WebGL when we are told to based on GLFW_CLIENT_API
+    if(useWebGL) {
+        var contextAttributes = {
+            antialias: (GLFW.params[0x00020013] > 1), // GLFW_FSAA_SAMPLES
+            depth: (GLFW.params[0x00020009] > 0), // GLFW_DEPTH_BITS
+            stencil: (GLFW.params[0x0002000A] > 0) // GLFW_STENCIL_BITS
+        };
 
-    // iOS < 15.2 has issues with WebGl 2.0 contexts. It's created without issues but doesn't work.
-    var iOSVersion = false;
-    try {
-      iOSVersion = parseFloat(('' + (/CPU.*OS ([0-9_]{1,5})|(CPU like).*AppleWebKit.*Mobile/i.exec(navigator.userAgent) || [0,''])[1]) .replace('undefined', '3_2').replace('_', '.').replace('_', '')) || false;
-    } catch (e) {}
+        // iOS < 15.2 has issues with WebGl 2.0 contexts. It's created without issues but doesn't work.
+        var iOSVersion = false;
+        try {
+            iOSVersion = parseFloat(('' + (/CPU.*OS ([0-9_]{1,5})|(CPU like).*AppleWebKit.*Mobile/i.exec(navigator.userAgent) || [0,''])[1]) .replace('undefined', '3_2').replace('_', '.').replace('_', '')) || false;
+        } catch (e) {}
 
-    if (iOSVersion && iOSVersion < 15.2)
-    {
-      contextAttributes.majorVersion = 1;
+        if (iOSVersion && iOSVersion < 15.2)
+        {
+            contextAttributes.majorVersion = 1;
+        }
+
+        // Browser.createContext: https://github.com/emscripten-core/emscripten/blob/master/src/library_browser.js#L312
+        Module.ctx = Browser.createContext(Module['canvas'], true, true, contextAttributes);
+        if (Module.ctx == null) {
+            contextAttributes.majorVersion = 1; // Try WebGL 1
+            Module.ctx = Browser.createContext(Module['canvas'], true, true, contextAttributes);
+        }
     }
-
-    // Browser.createContext: https://github.com/emscripten-core/emscripten/blob/master/src/library_browser.js#L312
-    Module.ctx = Browser.createContext(Module['canvas'], true, true, contextAttributes);
-    if (Module.ctx == null) {
-      contextAttributes.majorVersion = 1; // Try WebGL 1
-      Module.ctx = Browser.createContext(Module['canvas'], true, true, contextAttributes);
-    }
-
     return 1; // GL_TRUE
   },
 
@@ -765,6 +768,7 @@ var LibraryGLFW = {
     // we get information about the current pixel ratio from browser
     if (target == 0x00020019) { //GLFW_WINDOW_HIGH_DPI
       if (hint != 0) {
+        // the same logic is in dmloader.js -> using display.high_dpi
         GLFW.dpi = window.devicePixelRatio || 1;
       }
     }
@@ -775,7 +779,7 @@ var LibraryGLFW = {
     if (GLFW.closeFunc) {
       {{{ makeDynCall('i', 'GLFW.closeFunc') }}}();
     }
-    Module.ctx = Browser.destroyContext(Module['canvas'], true, true);
+    delete Module.ctx;
   },
 
   glfwSetWindowTitle: function(title) {
@@ -810,9 +814,6 @@ var LibraryGLFW = {
       if (GLFW.isFullscreen) {
         width = Math.floor(window.innerWidth * GLFW.dpi);
         height = Math.floor(window.innerHeight * GLFW.dpi);
-      } else {
-        width = Math.floor(width * GLFW.dpi);
-        height = Math.floor(height * GLFW.dpi);
       }
       GLFW.prevWidth = width;
       GLFW.prevHeight = height;
@@ -1122,7 +1123,7 @@ var LibraryGLFW = {
   glfwAccelerometerEnable: function() {
   },
 
-  glfwSetWindowBackgroundColor: function() {
+  glfwSetWindowBackgroundColor: function(color) {
   },
 
   glfwGetDisplayScaleFactor: function() {
@@ -1131,4 +1132,4 @@ var LibraryGLFW = {
 };
 
 autoAddDeps(LibraryGLFW, '$GLFW');
-mergeInto(LibraryManager.library, LibraryGLFW);
+addToLibrary(LibraryGLFW);

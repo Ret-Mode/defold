@@ -15,7 +15,9 @@
 #ifndef __GRAPHICS_DEVICE_OPENGL__
 #define __GRAPHICS_DEVICE_OPENGL__
 
+#include <dlib/atomic.h>
 #include <dlib/math.h>
+#include <dmsdk/dlib/atomic.h>
 #include <dmsdk/vectormath/cpp/vectormath_aos.h>
 #include <dlib/opaque_handle_container.h>
 #include <platform/platform_window.h>
@@ -29,11 +31,19 @@ namespace dmGraphics
         ATTACHMENT_TYPE_TEXTURE = 2,
     };
 
+    enum DeviceBufferType
+    {
+        DEVICE_BUFFER_TYPE_INDEX   = 0,
+        DEVICE_BUFFER_TYPE_VERTEX  = 1,
+    };
+
     struct OpenGLTexture
     {
+        TextureParams     m_Params;
         TextureType       m_Type;
         GLuint*           m_TextureIds;
         uint32_t          m_ResourceSize; // For Mip level 0. We approximate each mip level is 1/4th. Or MipSize0 * 1.33
+        int32_atomic_t    m_DataState; // data state per mip-map (mipX = bitX). 0=ok, 1=pending
         uint16_t          m_NumTextureIds;
         uint16_t          m_Width;
         uint16_t          m_Height;
@@ -41,8 +51,7 @@ namespace dmGraphics
         uint16_t          m_OriginalWidth;
         uint16_t          m_OriginalHeight;
         uint16_t          m_MipMapCount;
-        volatile uint16_t m_DataState; // data state per mip-map (mipX = bitX). 0=ok, 1=pending
-        TextureParams     m_Params;
+        uint8_t           m_UsageHintFlags;
     };
 
     struct OpenGLRenderTargetAttachment
@@ -67,6 +76,60 @@ namespace dmGraphics
         uint32_t                     m_BufferTypeFlags;
     };
 
+    struct OpenGLShader
+    {
+        GLuint               m_Id;
+        ShaderMeta           m_ShaderMeta;
+        ShaderDesc::Language m_Language;
+    };
+
+    struct OpenGLBuffer
+    {
+        GLuint           m_Id;
+        DeviceBufferType m_Type;
+        uint32_t         m_MemorySize;
+    };
+
+    struct OpenGLVertexAttribute
+    {
+        dmhash_t m_NameHash;
+        int32_t  m_Location;
+        GLint    m_Count;
+        GLenum   m_Type;
+    };
+
+    struct OpenGLUniformBuffer
+    {
+        dmArray<GLint> m_Indices;
+        dmArray<GLint> m_Offsets;
+        uint8_t*       m_BlockMemory;
+        GLuint         m_Id;
+        GLint          m_Binding;
+        GLint          m_BlockSize;
+        GLint          m_ActiveUniforms;
+        uint8_t        m_Dirty : 1;
+    };
+
+    struct OpenGLUniform
+    {
+        char*            m_Name;
+        dmhash_t         m_NameHash;
+        HUniformLocation m_Location;
+        GLint            m_Count;
+        GLenum           m_Type;
+        uint8_t          m_TextureUnit   : 7;
+        uint8_t          m_IsTextureType : 1;
+    };
+
+    struct OpenGLProgram
+    {
+        GLuint                         m_Id;
+        ShaderDesc::Language           m_Language;
+        dmArray<OpenGLVertexAttribute> m_Attributes;
+        dmArray<OpenGLUniformBuffer>   m_UniformBuffers;
+        dmArray<OpenGLUniform>         m_Uniforms;
+    };
+
     struct OpenGLContext
     {
         OpenGLContext(const ContextParams& params);
@@ -77,11 +140,17 @@ namespace dmGraphics
         dmArray<const char*>    m_Extensions; // pointers into m_ExtensionsString
         char*                   m_ExtensionsString;
         void*                   m_AuxContext;
-        volatile bool           m_AuxContextJobPending;
+        int32_atomic_t          m_AuxContextJobPending;
+        int32_atomic_t          m_DeleteContextRequested;
+
+        OpenGLProgram*          m_CurrentProgram;
 
         dmOpaqueHandleContainer<uintptr_t> m_AssetHandleContainer;
 
         PipelineState           m_PipelineState;
+
+        GLuint                  m_GlobalVAO;
+
         uint32_t                m_Width;
         uint32_t                m_Height;
         uint32_t                m_MaxTextureSize;
@@ -96,46 +165,21 @@ namespace dmGraphics
         uint32_t                m_DepthBufferBits;
         uint32_t                m_FrameBufferInvalidateBits;
         float                   m_MaxAnisotropy;
+        uint32_t                m_FrameBufferInvalidateAttachments : 1;
+        uint32_t                m_VerifyGraphicsCalls              : 1;
+        uint32_t                m_PrintDeviceInfo                  : 1;
+        uint32_t                m_IsGles3Version                   : 1; // 0 == gles 2, 1 == gles 3
+        uint32_t                m_IsShaderLanguageGles             : 1; // 0 == glsl, 1 == gles
+
+        uint32_t                m_PackedDepthStencilSupport        : 1;
         uint32_t                m_AsyncProcessingSupport           : 1;
         uint32_t                m_AnisotropySupport                : 1;
         uint32_t                m_TextureArraySupport              : 1;
         uint32_t                m_MultiTargetRenderingSupport      : 1;
         uint32_t                m_ComputeSupport                   : 1;
         uint32_t                m_StorageBufferSupport             : 1;
-        uint32_t                m_FrameBufferInvalidateAttachments : 1;
-        uint32_t                m_PackedDepthStencilSupport        : 1;
-        uint32_t                m_VerifyGraphicsCalls              : 1;
         uint32_t                m_RenderDocSupport                 : 1;
-        uint32_t                m_PrintDeviceInfo                  : 1;
-        uint32_t                m_IsGles3Version                   : 1; // 0 == gles 2, 1 == gles 3
-        uint32_t                m_IsShaderLanguageGles             : 1; // 0 == glsl, 1 == gles
-    };
-
-    struct OpenGLShader
-    {
-        GLuint               m_Id;
-        ShaderDesc::Language m_Language;
-    };
-
-    struct OpenglVertexAttribute
-    {
-        dmhash_t m_NameHash;
-        int32_t  m_Location;
-        GLint    m_Count;
-        GLenum   m_Type;
-    };
-
-    struct OpenGLProgram
-    {
-        GLuint                         m_Id;
-        ShaderDesc::Language           m_Language;
-        dmArray<OpenglVertexAttribute> m_Attributes;
-    };
-
-    struct OpenGLComputeProgram
-    {
-        GLuint               m_Id;
-        ShaderDesc::Language m_Language;
+        uint32_t                m_InstancingSupport                : 1;
     };
 }
 #endif // __GRAPHICS_DEVICE_OPENGL__
